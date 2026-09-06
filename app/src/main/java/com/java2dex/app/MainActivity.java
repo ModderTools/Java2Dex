@@ -387,12 +387,8 @@ public class MainActivity extends Activity {
             return wrap;
         }
 
-        @Override
-        public View getView(int position, View convertView, ViewGroupParentFix parent) {
-            return getView(position, convertView);
-        }
-
-        public View getView(int position, View convertView) {
+                @Override
+        public View getView(int position, View convertView, android.view.ViewGroup parent) {
             Holder h;
             View v = convertView;
             if (v == null) {
@@ -423,10 +419,3 @@ public class MainActivity extends Activity {
             }
             return v;
         }
-    }
-
-    /** small shim so the adapter signature stays clean */
-    private static class ViewGroupParentFix extends android.view.ViewGroup {
-        ViewGroupParentFix(android.content.Context c) { super(c); }
-    }
-}
