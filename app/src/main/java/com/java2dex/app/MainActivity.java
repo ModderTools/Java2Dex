@@ -11,6 +11,7 @@ import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
+import android.view.ViewGroup;
 import android.view.animation.OvershootInterpolator;
 import android.widget.BaseAdapter;
 import android.widget.EditText;
@@ -19,6 +20,7 @@ import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
 
+import java.io.File;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -119,9 +121,12 @@ public class MainActivity extends Activity {
         EditText search = Ui.input(this, "🔍  Search projects…");
         searchWrap.addView(search, new LinearLayout.LayoutParams(-1, -2));
         search.addTextChangedListener(new TextWatcher() {
-            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void onTextChanged(CharSequence s, int a, int b, int c) {}
-            @Override public void afterTextChanged(Editable s) {
+            @Override
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override
+            public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override
+            public void afterTextChanged(Editable s) {
                 query = s.toString();
                 applyFilter();
             }
@@ -183,7 +188,7 @@ public class MainActivity extends Activity {
         flp.bottomMargin = Ui.dp(this, 24);
         root.addView(fab, flp);
 
-        // ---------- splash overlay ----------
+        // ---------- splash ----------
         splash = new FrameLayout(this);
         splash.setBackgroundColor(Color.WHITE);
         splash.setClickable(true);
@@ -248,7 +253,8 @@ public class MainActivity extends Activity {
 
         splash.postDelayed(() -> splash.animate().alpha(0f).setDuration(400)
                 .setListener(new AnimatorListenerAdapter() {
-                    @Override public void onAnimationEnd(Animator a) {
+                    @Override
+                    public void onAnimationEnd(Animator a) {
                         splash.setVisibility(View.GONE);
                         Ui.popIn(fab, 60);
                     }
@@ -256,7 +262,7 @@ public class MainActivity extends Activity {
     }
 
     private void extractAndroidJar() {
-        final java.io.File target = new java.io.File(getFilesDir(), "sys/android.jar");
+        File target = new File(getFilesDir(), "sys/android.jar");
         if (target.exists()) return;
         new Thread(() -> {
             try {
@@ -269,11 +275,9 @@ public class MainActivity extends Activity {
                 out.flush();
                 out.close();
                 in.close();
-            } catch (Exception ignored) {}
+            } catch (Exception ignored) { }
         }, "jar-extract").start();
     }
-
-    // ---------------- data ----------------
 
     private void refresh() {
         projects.clear();
@@ -303,8 +307,8 @@ public class MainActivity extends Activity {
         for (Project p : projects) {
             if (q.isEmpty() || p.name.toLowerCase(Locale.US).contains(q)) shown.add(p);
         }
-        adapter.notifyDataSetChanged();
-        emptyBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
+        if (adapter != null) adapter.notifyDataSetChanged();
+        if (emptyBox != null) emptyBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
     }
 
     private void openDetail(Project p) {
@@ -333,7 +337,7 @@ public class MainActivity extends Activity {
                         + "• Compiler: Eclipse ECJ\n"
                         + "• DEXer: Google D8\n\n"
                         + "Output folder:\n"
-                        + new java.io.File(getFilesDir(), "JAVA2DEX").getAbsolutePath()
+                        + new File(getFilesDir(), "JAVA2DEX").getAbsolutePath()
                         + "\n\nBuilt with ❤ for the modding community.")
                 .setPositiveButton("Nice", null)
                 .show();
@@ -347,48 +351,17 @@ public class MainActivity extends Activity {
             TextView name, chip, sub;
         }
 
-        @Override public int getCount() { return shown.size(); }
-        @Override public Object getItem(int position) { return shown.get(position); }
-        @Override public long getItemId(int position) { return position; }
+        @Override
+        public int getCount() { return shown.size(); }
 
-        private View makeItemView(Holder h) {
-            FrameLayout wrap = new FrameLayout(MainActivity.this);
+        @Override
+        public Object getItem(int position) { return shown.get(position); }
 
-            LinearLayout card = new LinearLayout(MainActivity.this);
-            card.setOrientation(LinearLayout.VERTICAL);
-            card.setBackground(Ui.ripple(MainActivity.this,
-                    Ui.outline(Color.WHITE, Ui.STROKE, 16, 1, MainActivity.this)));
-            card.setElevation(Ui.dp(MainActivity.this, 2));
-            int p = Ui.dp(MainActivity.this, 14);
-            card.setPadding(p, p, p, p);
+        @Override
+        public long getItemId(int position) { return position; }
 
-            LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-
-            h.name = Ui.text(MainActivity.this, "", 15.5f, Ui.TEXT, true);
-            h.name.setSingleLine(true);
-            row.addView(h.name, new LinearLayout.LayoutParams(0, -2, 1f));
-
-            h.chip = Ui.text(MainActivity.this, "", 10.5f, Ui.GREEN_DARK, true);
-            h.chip.setBackground(Ui.fill(Ui.GREEN_LIGHT, 20, MainActivity.this));
-            h.chip.setPadding(Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 3),
-                    Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 3));
-            row.addView(h.chip, new LinearLayout.LayoutParams(-2, -2));
-
-            card.addView(row, new LinearLayout.LayoutParams(-1, -2));
-
-            h.sub = Ui.text(MainActivity.this, "", 12, Ui.TEXT_SUB, false);
-            h.sub.setSingleLine(true);
-            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
-            sp.topMargin = Ui.dp(MainActivity.this, 5);
-            card.addView(h.sub, sp);
-
-            wrap.addView(card, new FrameLayout.LayoutParams(-1, -2));
-            return wrap;
-        }
-
-                @Override
-        public View getView(int position, View convertView, android.view.ViewGroup parent) {
+        @Override
+        public View getView(int position, View convertView, ViewGroup parent) {
             Holder h;
             View v = convertView;
             if (v == null) {
@@ -419,3 +392,41 @@ public class MainActivity extends Activity {
             }
             return v;
         }
+
+        private View makeItemView(Holder h) {
+            FrameLayout wrap = new FrameLayout(MainActivity.this);
+
+            LinearLayout card = new LinearLayout(MainActivity.this);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setBackground(Ui.ripple(MainActivity.this,
+                    Ui.outline(Color.WHITE, Ui.STROKE, 16, 1, MainActivity.this)));
+            card.setElevation(Ui.dp(MainActivity.this, 2));
+            int pad = Ui.dp(MainActivity.this, 14);
+            card.setPadding(pad, pad, pad, pad);
+
+            LinearLayout row = new LinearLayout(MainActivity.this);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+
+            h.name = Ui.text(MainActivity.this, "", 15.5f, Ui.TEXT, true);
+            h.name.setSingleLine(true);
+            row.addView(h.name, new LinearLayout.LayoutParams(0, -2, 1f));
+
+            h.chip = Ui.text(MainActivity.this, "", 10.5f, Ui.GREEN_DARK, true);
+            h.chip.setBackground(Ui.fill(Ui.GREEN_LIGHT, 20, MainActivity.this));
+            h.chip.setPadding(Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 3),
+                    Ui.dp(MainActivity.this, 10), Ui.dp(MainActivity.this, 3));
+            row.addView(h.chip, new LinearLayout.LayoutParams(-2, -2));
+
+            card.addView(row, new LinearLayout.LayoutParams(-1, -2));
+
+            h.sub = Ui.text(MainActivity.this, "", 12, Ui.TEXT_SUB, false);
+            h.sub.setSingleLine(true);
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
+            sp.topMargin = Ui.dp(MainActivity.this, 5);
+            card.addView(h.sub, sp);
+
+            wrap.addView(card, new FrameLayout.LayoutParams(-1, -2));
+            return wrap;
+        }
+    }
+}
