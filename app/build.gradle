@@ -1,0 +1,45 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.java2dex.app'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.java2dex.app'
+        minSdk 26
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+
+    packaging {
+        resources {
+            excludes += ['META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA',
+                         'META-INF/*.EC', 'META-INF/versions/**',
+                         'META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/NOTICE']
+        }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+dependencies {
+    // Java compiler (runs on device) + DEX converter (runs on device)
+    implementation 'org.eclipse.jdt.core.compiler:ecj:4.6.1'
+    implementation 'com.android.tools:r8:2.1.75'
+}
