@@ -2,6 +2,7 @@ package com.java2dex.app;
 
 import android.content.Context;
 import android.content.SharedPreferences;
+import android.os.Environment;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -124,8 +125,13 @@ public class Project {
     public File dexTmpDir(Context c)  { return new File(dir(c), "dexout"); }
     public File logFile(Context c)    { return new File(dir(c), "build.log.txt"); }
 
-    /** JAVA2DEX/<project>/classes.dex  — the user-facing output */
-    public File publicDexDir(Context c)  { return new File(java2dexRoot(c), safeName()); }
+    /** Java2Dex/<project>/classes.dex — public storage: /storage/emulated/0/Java2Dex */
+    public File publicDexDir(Context c) {
+        File f = new File(java2dexRoot(c), safeName());
+        if (!f.exists()) f.mkdirs();
+        return f;
+    }
+
     public File publicDexFile(Context c) { return new File(publicDexDir(c), "classes.dex"); }
 
     public String safeName() {
@@ -133,9 +139,9 @@ public class Project {
         return s.length() == 0 ? "project" : s;
     }
 
-    /** auto-generated on first launch (internal storage) */
+    /** /storage/emulated/0/Java2Dex — auto-generated (needs storage permission) */
     public static File java2dexRoot(Context c) {
-        File f = new File(c.getFilesDir(), "JAVA2DEX");
+        File f = new File(Environment.getExternalStorageDirectory(), "Java2Dex");
         if (!f.exists()) f.mkdirs();
         return f;
     }
