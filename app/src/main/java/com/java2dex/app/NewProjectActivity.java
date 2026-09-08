@@ -433,7 +433,7 @@ public class NewProjectActivity extends Activity {
         t1p.topMargin = Ui.dp(this, 18);
         col.addView(t1, t1p);
 
-        TextView t2 = Ui.text(this, "classes.dex saved to JAVA2DEX folder", 13, Ui.TEXT_SUB, false);
+        TextView t2 = Ui.text(this, "classes.dex saved to /storage/emulated/0/Java2Dex/", 13, Ui.TEXT_SUB, false);
         t2.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams t2p = new LinearLayout.LayoutParams(-2, -2);
         t2p.topMargin = Ui.dp(this, 4);
@@ -479,7 +479,11 @@ public class NewProjectActivity extends Activity {
 
         copyBtn.setOnClickListener(v ->
                 Ui.copy(this, "dex-path", p.publicDexFile(this).getAbsolutePath()));
-        shareBtn.setOnClickListener(v -> sharePath(p));
+        shareBtn.setOnClickListener(v -> {
+    File f = p.publicDexFile(this);
+    if (f.exists()) Ui.shareFile(this, f, p.safeName() + "_classes.dex");
+    else Ui.toast(this, "File missing — try again");
+});
         doneBtn.setOnClickListener(v -> finish());
     }
 
@@ -569,13 +573,5 @@ public class NewProjectActivity extends Activity {
         } catch (Exception e) {
             Ui.toast(this, "Export failed: " + e.getMessage());
         }
-    }
-
-    private void sharePath(Project p) {
-        Intent s = new Intent(Intent.ACTION_SEND);
-        s.setType("text/plain");
-        s.putExtra(Intent.EXTRA_TEXT, "Java2Dex output\n\nProject: " + p.name
-                + "\nDEX: " + p.publicDexFile(this).getAbsolutePath());
-        startActivity(Intent.createChooser(s, "Share DEX info"));
     }
 }
