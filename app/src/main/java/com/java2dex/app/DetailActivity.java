@@ -135,7 +135,11 @@ public class DetailActivity extends Activity {
         ex.setOnClickListener(v -> exportToDownloads());
         cp.setOnClickListener(v ->
                 Ui.copy(this, "dex-path", p.publicDexFile(this).getAbsolutePath()));
-        sh.setOnClickListener(v -> sharePath());
+        sh.setOnClickListener(v -> {
+    File f = p.publicDexFile(this);
+    if (f.exists()) Ui.shareFile(this, f, p.safeName() + "_classes.dex");
+    else Ui.toast(this, "No DEX yet — re-convert first");
+});
         lg.setOnClickListener(v -> showLog(null));
         del.setOnClickListener(v -> confirmDelete());
 
