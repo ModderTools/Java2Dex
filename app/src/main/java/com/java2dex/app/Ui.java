@@ -2,9 +2,12 @@ package com.java2dex.app;
 
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
+import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.ContentValues;
 import android.content.Context;
+import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Canvas;
 import android.graphics.Paint;
@@ -14,6 +17,11 @@ import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.graphics.drawable.RippleDrawable;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Environment;
+import android.os.StrictMode;
+import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.MotionEvent;
 import android.view.View;
@@ -24,6 +32,11 @@ import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.util.Locale;
 
 /** UI toolkit : colors, shapes, animations, helpers — all in pure Java */
@@ -132,6 +145,59 @@ public class Ui {
         Toast.makeText(c, m, Toast.LENGTH_SHORT).show();
     }
 
+    /**
+     * Shares the REAL file.
+     * Android 10+ : file is registered into MediaStore (Downloads/Java2Dex) and
+     *               shared as a content:// URI — every app can read it.
+     * Android 8-9 : shares the file directly from /storage/emulated/0/Java2Dex.
+     */
+    public static void shareFile(Activity act, File file, String name) {
+        if (act == null || file == null || !file.exists()) {
+            if (act != null) toast(act, "File not found — convert first");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 29) {
+            try {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+                cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+                cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
+                        Environment.DIRECTORY_DOWNLOADS + "/Java2Dex");
+                Uri uri = act.getContentResolver()
+                        .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri == null) throw new IOException("MediaStore insert failed");
+                InputStream in = new FileInputStream(file);
+                OutputStream out = act.getContentResolver().openOutputStream(uri);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                out.flush();
+                out.close();
+                in.close();
+                Intent s = new Intent(Intent.ACTION_SEND);
+                s.setType("application/octet-stream");
+                s.putExtra(Intent.EXTRA_STREAM, uri);
+                s.putExtra(Intent.EXTRA_SUBJECT, name);
+                s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                act.startActivity(Intent.createChooser(s, "Share DEX file"));
+                return;
+            } catch (Exception ignored) {
+                // fall through to direct share
+            }
+        }
+        try {
+            // Android 8/9: allow file:// URIs to leave the app
+            java.lang.reflect.Method m = StrictMode.class
+                    .getMethod("disableDeathOnFileUriExposure");
+            m.invoke(null);
+        } catch (Exception ignored) { }
+        Intent s = new Intent(Intent.ACTION_SEND);
+        s.setType("application/octet-stream");
+        s.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(file));
+        s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        act.startActivity(Intent.createChooser(s, "Share DEX file"));
+    }
+
     public static void popIn(View v, long delay) {
         v.setAlpha(0f);
         v.setScaleX(0.85f);
@@ -158,10 +224,7 @@ public class Ui {
     public static void countUp(final TextView t, int to) {
         ValueAnimator a = ValueAnimator.ofInt(0, to);
         a.setDuration(650);
-        a.addUpdateListener(anim -> {
-            int val = (Integer) anim.getAnimatedValue();
-            t.setText(String.valueOf(val));
-        });
+        a.addUpdateListener(anim -> t.setText(String.valueOf((Integer) anim.getAnimatedValue())));
         a.start();
     }
 
