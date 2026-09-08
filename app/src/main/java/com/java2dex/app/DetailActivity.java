@@ -317,11 +317,4 @@ public class DetailActivity extends Activity {
         }
     }
 
-    private void sharePath() {
-        Intent s = new Intent(Intent.ACTION_SEND);
-        s.setType("text/plain");
-        s.putExtra(Intent.EXTRA_TEXT, "Java2Dex output\n\nProject: " + p.name
-                + "\nDEX: " + p.publicDexFile(this).getAbsolutePath());
-        startActivity(Intent.createChooser(s, "Share DEX info"));
-    }
 }
