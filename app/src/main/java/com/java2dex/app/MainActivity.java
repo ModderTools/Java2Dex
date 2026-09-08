@@ -5,8 +5,13 @@ import android.animation.AnimatorListenerAdapter;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.Settings;
 import android.text.Editable;
 import android.text.TextWatcher;
 import android.view.Gravity;
@@ -30,8 +35,11 @@ import java.util.Locale;
 
 public class MainActivity extends Activity {
 
+    private static final int REQ_STORAGE = 77;
+
     private ListView list;
     private LinearLayout emptyBox;
+    private LinearLayout permOverlay;
     private TextView statTotal, statOk, statErr;
     private FrameLayout splash, splashLogo, fab;
     private final List<Project> projects = new ArrayList<>();
@@ -39,6 +47,7 @@ public class MainActivity extends Activity {
     private Adapter adapter;
     private String query = "";
     private boolean statsAnimated = false;
+    private boolean askedStorage = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -46,10 +55,7 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Ui.GREEN_DEEP);
         getWindow().setNavigationBarColor(Color.WHITE);
 
-        // auto-generate JAVA2DEX folder on first launch
-        Project.java2dexRoot(this);
         extractAndroidJar();
-
         buildUi();
         refresh();
         runSplash();
@@ -58,7 +64,48 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        boolean ok = storageOk();
+        if (ok) Project.java2dexRoot(this);
+        if (permOverlay != null) {
+            permOverlay.setVisibility((!ok && askedStorage) ? View.VISIBLE : View.GONE);
+        }
         refresh();
+    }
+
+    // ---------------- storage permission ----------------
+
+    private boolean storageOk() {
+        if (Build.VERSION.SDK_INT >= 30) {
+            return Environment.isExternalStorageManager();
+        }
+        return checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void ensureStorage() {
+        askedStorage = true;
+        if (storageOk()) {
+            Project.java2dexRoot(this);
+            if (permOverlay != null) permOverlay.setVisibility(View.GONE);
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 30) {
+            try {
+                Intent i = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                        Uri.parse("package:" + getPackageName()));
+                startActivityForResult(i, REQ_STORAGE);
+            } catch (Exception e) {
+                try {
+                    startActivityForResult(new Intent(
+                            Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION), REQ_STORAGE);
+                } catch (Exception ignored) {
+                    Ui.toast(this, "Enable 'All files access' in Settings");
+                }
+            }
+        } else {
+            requestPermissions(new String[]{
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQ_STORAGE);
+        }
     }
 
     private void buildUi() {
@@ -188,6 +235,43 @@ public class MainActivity extends Activity {
         flp.bottomMargin = Ui.dp(this, 24);
         root.addView(fab, flp);
 
+        // ---------- permission overlay ----------
+        permOverlay = new LinearLayout(this);
+        permOverlay.setOrientation(LinearLayout.VERTICAL);
+        permOverlay.setGravity(Gravity.CENTER);
+        permOverlay.setBackgroundColor(Color.WHITE);
+        permOverlay.setClickable(true);
+        permOverlay.setVisibility(View.GONE);
+
+        FrameLayout icon = new FrameLayout(this);
+        icon.setBackground(Ui.gradient(Ui.GREEN, Ui.GREEN_DARK, 34, this));
+        icon.setElevation(Ui.dp(this, 6));
+        TextView ic = Ui.text(this, "📁", 30, Color.WHITE, false);
+        ic.setGravity(Gravity.CENTER);
+        icon.addView(ic, new FrameLayout.LayoutParams(-1, -1));
+        permOverlay.addView(icon, new LinearLayout.LayoutParams(Ui.dp(this, 92), Ui.dp(this, 92)));
+
+        TextView pt = Ui.text(this, "Storage Permission", 20, Ui.TEXT, true);
+        pt.setGravity(Gravity.CENTER);
+        pt.setPadding(0, Ui.dp(this, 18), 0, 0);
+        permOverlay.addView(pt, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView pd = Ui.text(this,
+                "Java2Dex saves your DEX files to:\n/storage/emulated/0/Java2Dex/\n\n"
+                        + "Please allow file access so the output\nfolder can be created and shared.",
+                13, Ui.TEXT_SUB, false);
+        pd.setGravity(Gravity.CENTER);
+        pd.setPadding(Ui.dp(this, 32), Ui.dp(this, 8), Ui.dp(this, 32), 0);
+        permOverlay.addView(pd, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView grant = Ui.button(this, "🔓  Grant Permission", Ui.GREEN);
+        grant.setOnClickListener(v -> ensureStorage());
+        LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(-2, -2);
+        glp.topMargin = Ui.dp(this, 22);
+        permOverlay.addView(grant, glp);
+
+        root.addView(permOverlay, new FrameLayout.LayoutParams(-1, -1));
+
         // ---------- splash ----------
         splash = new FrameLayout(this);
         splash.setBackgroundColor(Color.WHITE);
@@ -257,6 +341,7 @@ public class MainActivity extends Activity {
                     public void onAnimationEnd(Animator a) {
                         splash.setVisibility(View.GONE);
                         Ui.popIn(fab, 60);
+                        ensureStorage();
                     }
                 }).start(), 1300);
     }
@@ -337,7 +422,7 @@ public class MainActivity extends Activity {
                         + "• Compiler: Eclipse ECJ\n"
                         + "• DEXer: Google D8\n\n"
                         + "Output folder:\n"
-                        + new File(getFilesDir(), "JAVA2DEX").getAbsolutePath()
+                        + Project.java2dexRoot(this).getAbsolutePath()
                         + "\n\nBuilt with ❤ for the modding community.")
                 .setPositiveButton("Nice", null)
                 .show();
