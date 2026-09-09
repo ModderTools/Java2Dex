@@ -45,9 +45,9 @@ public class NewProjectActivity extends Activity {
             + "    }\n\n"
             + "    public static int add(int a, int b) {\n"
             + "        return a + b;\n"
-            + "    }\n"
-            + "}\n";
+            + "    }\n}\n";
 
+    private Theme t;
     private EditText nameInput;
     private TextView srcSub, libSub, statusText;
     private ScrollView formScroll;
@@ -57,24 +57,23 @@ public class NewProjectActivity extends Activity {
     private final List<Uri> sources = new ArrayList<>();
     private final List<Uri> libs = new ArrayList<>();
     private boolean useSample = false;
-    private String lastError = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        t = Theme.get(this);
         getWindow().setStatusBarColor(Ui.GREEN_DEEP);
         buildUi();
     }
 
     private void buildUi() {
         FrameLayout root = new FrameLayout(this);
-        root.setBackgroundColor(Ui.GREEN_BG);
+        root.setBackgroundColor(t.bg);
         setContentView(root);
 
         FrameLayout stage = new FrameLayout(this);
         root.addView(stage, new FrameLayout.LayoutParams(-1, -1));
 
-        // ================= FORM =================
         formScroll = new ScrollView(this);
         formScroll.setFillViewport(true);
         stage.addView(formScroll, new FrameLayout.LayoutParams(-1, -1));
@@ -86,105 +85,131 @@ public class NewProjectActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
         header.setBackground(Ui.gradient(Ui.GREEN_DEEP, Ui.GREEN, 0, this));
-        header.setPadding(Ui.dp(this, 18), Ui.dp(this, 26), Ui.dp(this, 18), Ui.dp(this, 22));
+        header.setPadding(Ui.dp(18), Ui.dp(26), Ui.dp(18), Ui.dp(22));
 
         TextView back = Ui.text(this, "←  Back", 15, Color.WHITE, true);
         back.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
-        back.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), Ui.dp(this, 8));
+        back.setPadding(Ui.dp(14), Ui.dp(8), Ui.dp(14), Ui.dp(8));
         back.setOnClickListener(v -> finish());
         header.addView(back, new LinearLayout.LayoutParams(-2, -2));
 
         TextView h1 = Ui.text(this, "New Project", 22, Color.WHITE, true);
         LinearLayout.LayoutParams h1p = new LinearLayout.LayoutParams(-2, -2);
-        h1p.topMargin = Ui.dp(this, 14);
+        h1p.topMargin = Ui.dp(14);
         header.addView(h1, h1p);
-        header.addView(Ui.text(this, "Compile Java sources into a classes.dex", 12, 0xB3FFFFFF, false));
+        header.addView(Ui.text(this, "Compile Java sources into classes.dex", 12, 0xB3FFFFFF, false));
         col.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 16), Ui.dp(this, 28));
+        body.setPadding(Ui.dp(16), Ui.dp(16), Ui.dp(16), Ui.dp(28));
         col.addView(body, new LinearLayout.LayoutParams(-1, -2));
 
-        body.addView(Ui.text(this, "PROJECT NAME", 11, Ui.TEXT_SUB, true));
-        nameInput = Ui.input(this, "e.g. MyModPatch");
+        body.addView(Ui.text(this, "PROJECT NAME", 11, t.textSub, true));
+        nameInput = Ui.input(this, "e.g. MyModPatch", t);
         LinearLayout.LayoutParams nip = new LinearLayout.LayoutParams(-1, -2);
-        nip.topMargin = Ui.dp(this, 7);
+        nip.topMargin = Ui.dp(7);
         body.addView(nameInput, nip);
 
-        // source picker card
         srcCard = new LinearLayout(this);
         srcCard.setOrientation(LinearLayout.VERTICAL);
-        srcCard.setBackground(Ui.outline(Color.WHITE, Ui.STROKE, 14, 1.2f, this));
-        int pd = Ui.dp(this, 14);
+        srcCard.setBackground(Ui.outline(t.card, t.cardStroke, 14, 1.2f, this));
+        int pd = Ui.dp(14);
         srcCard.setPadding(pd, pd, pd, pd);
-        srcCard.addView(Ui.text(this, "📄  Java sources", 14.5f, Ui.TEXT, true));
-        srcSub = Ui.text(this, "Tap to choose .java files or a .zip archive", 11.5f, Ui.TEXT_SUB, false);
+        srcCard.addView(Ui.text(this, "📄  Java sources", 14.5f, t.text, true));
+        srcSub = Ui.text(this, "Tap to choose .java files or a .zip archive", 11.5f, t.textSub, false);
         LinearLayout.LayoutParams ssp = new LinearLayout.LayoutParams(-2, -2);
-        ssp.topMargin = Ui.dp(this, 3);
+        ssp.topMargin = Ui.dp(3);
         srcCard.addView(srcSub, ssp);
         srcCard.setOnClickListener(v -> pick(REQ_SRC));
         LinearLayout.LayoutParams scp = new LinearLayout.LayoutParams(-1, -2);
-        scp.topMargin = Ui.dp(this, 16);
+        scp.topMargin = Ui.dp(16);
         body.addView(srcCard, scp);
 
-        // libs picker card
         LinearLayout libCard = new LinearLayout(this);
         libCard.setOrientation(LinearLayout.VERTICAL);
-        libCard.setBackground(Ui.outline(Color.WHITE, Ui.STROKE, 14, 1.2f, this));
+        libCard.setBackground(Ui.outline(t.card, t.cardStroke, 14, 1.2f, this));
         libCard.setPadding(pd, pd, pd, pd);
-        libCard.addView(Ui.text(this, "📚  Library jars (optional)", 14.5f, Ui.TEXT, true));
-        libSub = Ui.text(this, "Tap to add .jar / .zip files to the classpath", 11.5f, Ui.TEXT_SUB, false);
+        libCard.addView(Ui.text(this, "📚  Library jars (optional)", 14.5f, t.text, true));
+        libSub = Ui.text(this, "Tap to add .jar / .zip to classpath", 11.5f, t.textSub, false);
         LinearLayout.LayoutParams lsp = new LinearLayout.LayoutParams(-2, -2);
-        lsp.topMargin = Ui.dp(this, 3);
+        lsp.topMargin = Ui.dp(3);
         libCard.addView(libSub, lsp);
         libCard.setOnClickListener(v -> pick(REQ_LIBS));
         LinearLayout.LayoutParams lcp = new LinearLayout.LayoutParams(-1, -2);
-        lcp.topMargin = Ui.dp(this, 10);
+        lcp.topMargin = Ui.dp(10);
         body.addView(libCard, lcp);
 
-        TextView sample = Ui.text(this, "✨  Or load a sample project to try", 13, Ui.GREEN_DARK, true);
-        sample.setPadding(0, Ui.dp(this, 14), 0, 0);
-        sample.setOnClickListener(v -> loadSample());
+        // IDE card
+        LinearLayout ideCard = new LinearLayout(this);
+        ideCard.setOrientation(LinearLayout.VERTICAL);
+        ideCard.setBackground(Ui.ripple(this, Ui.outline(t.card, t.accent, 14, 1.4f, this)));
+        ideCard.setPadding(pd, pd, pd, pd);
+        ideCard.addView(Ui.text(this, "🧠  Or open in Code IDE", 14.5f, t.accentDark, true));
+        ideCard.addView(Ui.text(this,
+                "Create files & folders, import, edit with\nsyntax highlight — then convert right there",
+                11.5f, t.textSub, false));
+        ideCard.setOnClickListener(v -> openInIde());
+        LinearLayout.LayoutParams icp = new LinearLayout.LayoutParams(-1, -2);
+        icp.topMargin = Ui.dp(10);
+        body.addView(ideCard, icp);
+
+        TextView sample = Ui.text(this, "✨  Load sample project", 13, t.accentDark, true);
+        sample.setPadding(0, Ui.dp(14), 0, 0);
+        sample.setOnClickListener(v -> {
+            useSample = true;
+            srcSub.setText("Sample project loaded (HelloMod.java)");
+            Ui.toast(this, "Sample loaded — name it & convert!");
+        });
         body.addView(sample, new LinearLayout.LayoutParams(-2, -2));
 
         TextView convertBtn = Ui.button(this, "⚡  CONVERT TO DEX", Ui.GREEN);
         convertBtn.setOnClickListener(v -> startConvert());
         LinearLayout.LayoutParams cbp = new LinearLayout.LayoutParams(-1, -2);
-        cbp.topMargin = Ui.dp(this, 22);
+        cbp.topMargin = Ui.dp(22);
         body.addView(convertBtn, cbp);
 
-        // ================= PROGRESS =================
         progressBox = new LinearLayout(this);
         progressBox.setOrientation(LinearLayout.VERTICAL);
         progressBox.setGravity(Gravity.CENTER);
-        progressBox.setBackgroundColor(Color.WHITE);
+        progressBox.setBackgroundColor(t.bg);
         progressBox.setVisibility(View.GONE);
         progressBox.setClickable(true);
-
         ProgressBar pb = new ProgressBar(this);
         pb.setIndeterminateTintList(ColorStateList.valueOf(Ui.GREEN));
         progressBox.addView(pb, new LinearLayout.LayoutParams(-2, -2));
-
-        statusText = Ui.text(this, "Preparing…", 14.5f, Ui.TEXT, true);
+        statusText = Ui.text(this, "Preparing…", 14.5f, t.text, true);
         statusText.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams stp = new LinearLayout.LayoutParams(-2, -2);
-        stp.topMargin = Ui.dp(this, 16);
+        stp.topMargin = Ui.dp(16);
         progressBox.addView(statusText, stp);
-
-        TextView hint = Ui.text(this, "Large projects may take a while", 12, Ui.TEXT_SUB, false);
-        hint.setGravity(Gravity.CENTER);
-        progressBox.addView(hint);
-
+        progressBox.addView(Ui.text(this, "Large projects may take a while", 12, t.textSub, false));
         stage.addView(progressBox, new FrameLayout.LayoutParams(-1, -1));
 
-        // ================= RESULT =================
         resultBox = new FrameLayout(this);
         resultBox.setVisibility(View.GONE);
         stage.addView(resultBox, new FrameLayout.LayoutParams(-1, -1));
     }
 
-    // ---------------- pickers ----------------
+    private void openInIde() {
+        String name = nameInput.getText().toString().trim();
+        if (name.length() == 0) { Ui.shake(nameInput); Ui.toast(this, "Enter a project name first"); return; }
+        Project p = new Project();
+        p.id = String.valueOf(System.currentTimeMillis());
+        p.name = name;
+        p.createdAt = System.currentTimeMillis();
+        p.srcDir(this).mkdirs();
+        if (useSample) {
+            try {
+                FileWriter w = new FileWriter(new File(p.srcDir(this), "HelloMod.java"));
+                w.write(SAMPLE_JAVA); w.close();
+            } catch (Exception ignored) { }
+        }
+        Project.upsert(this, p);
+        Intent i = new Intent(this, IdeActivity.class);
+        i.putExtra("id", p.id);
+        startActivity(i);
+    }
 
     private void pick(int req) {
         Intent i = new Intent(Intent.ACTION_GET_CONTENT);
@@ -201,12 +226,9 @@ public class NewProjectActivity extends Activity {
         if (resultCode != RESULT_OK || data == null) return;
         List<Uri> uris = new ArrayList<>();
         if (data.getClipData() != null) {
-            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
+            for (int i = 0; i < data.getClipData().getItemCount(); i++)
                 uris.add(data.getClipData().getItemAt(i).getUri());
-            }
-        } else if (data.getData() != null) {
-            uris.add(data.getData());
-        }
+        } else if (data.getData() != null) uris.add(data.getData());
         if (uris.isEmpty()) return;
         if (requestCode == REQ_SRC) {
             sources.addAll(uris);
@@ -218,26 +240,10 @@ public class NewProjectActivity extends Activity {
         }
     }
 
-    private void loadSample() {
-        useSample = true;
-        srcSub.setText("Sample project loaded (HelloMod.java)");
-        Ui.toast(this, "Sample loaded — enter a name and convert!");
-    }
-
-    // ---------------- convert flow ----------------
-
     private void startConvert() {
         String name = nameInput.getText().toString().trim();
-        if (name.length() == 0) {
-            Ui.shake(nameInput);
-            Ui.toast(this, "Enter a project name");
-            return;
-        }
-        if (sources.isEmpty() && !useSample) {
-            Ui.shake(srcCard);
-            Ui.toast(this, "Select .java files or a .zip");
-            return;
-        }
+        if (name.length() == 0) { Ui.shake(nameInput); Ui.toast(this, "Enter a project name"); return; }
+        if (sources.isEmpty() && !useSample) { Ui.shake(srcCard); Ui.toast(this, "Select .java files or a .zip"); return; }
         Project p = new Project();
         p.id = String.valueOf(System.currentTimeMillis());
         p.name = name;
@@ -249,10 +255,7 @@ public class NewProjectActivity extends Activity {
         new Thread(() -> {
             final boolean staged = stageFiles(p);
             runOnUiThread(() -> {
-                if (!staged) {
-                    showError(lastError);
-                    return;
-                }
+                if (!staged) { showError("[Java2Dex] Could not import files."); return; }
                 runConvert(p);
             });
         }).start();
@@ -261,13 +264,10 @@ public class NewProjectActivity extends Activity {
     private void runConvert(final Project p) {
         showProgress();
         Converter.convert(this, p, new Converter.Callback() {
-            @Override public void onStep(String s) {
-                statusText.setText(s);
-            }
+            @Override public void onStep(String s) { statusText.setText(s); }
             @Override public void onDone(boolean ok, String log) {
                 saveLog(p, log);
-                if (ok) showSuccess(p);
-                else showError(log);
+                if (ok) showSuccess(p); else showError(log);
             }
         });
     }
@@ -278,18 +278,16 @@ public class NewProjectActivity extends Activity {
             src.mkdirs();
             if (useSample) {
                 FileWriter w = new FileWriter(new File(src, "HelloMod.java"));
-                w.write(SAMPLE_JAVA);
-                w.close();
+                w.write(SAMPLE_JAVA); w.close();
             }
             int i = 0;
             for (Uri u : sources) {
-                String name = displayName(u);
-                if (name == null || name.length() == 0) name = "file_" + (i++);
-                name = sanitize(name);
-                File dst = new File(src, name);
+                String n = displayName(u);
+                if (n == null || n.length() == 0) n = "file_" + (i++);
+                File dst = new File(src, sanitize(n));
                 copyStream(getContentResolver().openInputStream(u), new FileOutputStream(dst));
-                if (name.toLowerCase().endsWith(".zip")) {
-                    unzip(dst, src);
+                if (n.toLowerCase().endsWith(".zip")) {
+                    Ui.unzipJava(dst, src);
                     dst.delete();
                 }
             }
@@ -298,20 +296,17 @@ public class NewProjectActivity extends Activity {
                 libDir.mkdirs();
                 int j = 0;
                 for (Uri u : libs) {
-                    String name = displayName(u);
-                    if (name == null || name.length() == 0) name = "lib_" + (j++) + ".jar";
+                    String n = displayName(u);
+                    if (n == null || n.length() == 0) n = "lib_" + (j++) + ".jar";
                     copyStream(getContentResolver().openInputStream(u),
-                            new FileOutputStream(new File(libDir, sanitize(name))));
+                            new FileOutputStream(new File(libDir, sanitize(n))));
                 }
             }
             return true;
         } catch (Exception e) {
-            lastError = "[Java2Dex] Could not import files: " + e.getMessage();
             return false;
         }
     }
-
-    // ---------------- helpers ----------------
 
     private static String describe(List<Uri> list) {
         if (list.isEmpty()) return "Nothing";
@@ -333,11 +328,9 @@ public class NewProjectActivity extends Activity {
                         String s = c.getString(idx);
                         if (s != null && s.length() > 0) return s;
                     }
-                } finally {
-                    c.close();
-                }
+                } finally { c.close(); }
             }
-        } catch (Exception ignored) {}
+        } catch (Exception ignored) { }
         String seg = u.getLastPathSegment();
         if (seg == null) return null;
         int i = seg.lastIndexOf('/');
@@ -348,34 +341,7 @@ public class NewProjectActivity extends Activity {
         byte[] buf = new byte[8192];
         int n;
         while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-        out.flush();
-        out.close();
-        in.close();
-    }
-
-    private static void unzip(File zip, File destDir) throws IOException {
-        java.util.zip.ZipInputStream zis =
-                new java.util.zip.ZipInputStream(new FileInputStream(zip));
-        try {
-            java.util.zip.ZipEntry e;
-            while ((e = zis.getNextEntry()) != null) {
-                if (e.isDirectory()) continue;
-                String name = e.getName().replace("\\", "/");
-                if (name.contains("..")) continue;
-                while (name.startsWith("/")) name = name.substring(1);
-                if (!name.toLowerCase().endsWith(".java")) continue;
-                File out = new File(destDir, name);
-                File parent = out.getParentFile();
-                if (parent != null) parent.mkdirs();
-                FileOutputStream fo = new FileOutputStream(out);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = zis.read(buf)) > 0) fo.write(buf, 0, n);
-                fo.close();
-            }
-        } finally {
-            zis.close();
-        }
+        out.flush(); out.close(); in.close();
     }
 
     private void saveLog(final Project p, final String log) {
@@ -384,13 +350,14 @@ public class NewProjectActivity extends Activity {
                 File f = p.logFile(this);
                 f.getParentFile().mkdirs();
                 FileWriter w = new FileWriter(f);
-                w.write(log);
-                w.close();
-            } catch (Exception ignored) {}
+                w.write(log); w.close();
+            } catch (Exception ignored) { }
         }).start();
     }
 
-    // ---------------- states ----------------
+    private LinearLayout.LayoutParams rowWeight() {
+        return new LinearLayout.LayoutParams(0, -2, 1f);
+    }
 
     private void showProgress() {
         formScroll.setVisibility(View.GONE);
@@ -405,10 +372,6 @@ public class NewProjectActivity extends Activity {
         formScroll.setVisibility(View.VISIBLE);
     }
 
-    private LinearLayout.LayoutParams rowWeight() {
-        return new LinearLayout.LayoutParams(0, -2, 1f);
-    }
-
     private void showSuccess(final Project p) {
         progressBox.setVisibility(View.GONE);
         resultBox.removeAllViews();
@@ -420,70 +383,70 @@ public class NewProjectActivity extends Activity {
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
         col.setGravity(Gravity.CENTER_HORIZONTAL);
-        col.setPadding(Ui.dp(this, 22), Ui.dp(this, 40), Ui.dp(this, 22), Ui.dp(this, 28));
+        col.setPadding(Ui.dp(22), Ui.dp(40), Ui.dp(22), Ui.dp(28));
         sc.addView(col, new ScrollView.LayoutParams(-1, -2));
 
         Ui.SuccessView sv = new Ui.SuccessView(this);
-        col.addView(sv, new LinearLayout.LayoutParams(Ui.dp(this, 110), Ui.dp(this, 110)));
+        col.addView(sv, new LinearLayout.LayoutParams(Ui.dp(110), Ui.dp(110)));
         sv.start();
 
-        TextView t1 = Ui.text(this, "Conversion Successful!", 19, Ui.TEXT, true);
+        TextView t1 = Ui.text(this, "Conversion Successful!", 19, t.text, true);
         t1.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams t1p = new LinearLayout.LayoutParams(-2, -2);
-        t1p.topMargin = Ui.dp(this, 18);
+        t1p.topMargin = Ui.dp(18);
         col.addView(t1, t1p);
 
-        TextView t2 = Ui.text(this, "classes.dex saved to /storage/emulated/0/Java2Dex/", 13, Ui.TEXT_SUB, false);
+        TextView t2 = Ui.text(this, "Saved to /storage/emulated/0/Java2Dex/", 13, t.textSub, false);
         t2.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams t2p = new LinearLayout.LayoutParams(-2, -2);
-        t2p.topMargin = Ui.dp(this, 4);
-        col.addView(t2, t2p);
+        col.addView(t2);
 
         LinearLayout pathCard = new LinearLayout(this);
         pathCard.setOrientation(LinearLayout.VERTICAL);
-        pathCard.setBackground(Ui.outline(Ui.GREEN_LIGHT, Ui.GREEN, 12, 1, this));
-        int pd = Ui.dp(this, 12);
-        pathCard.setPadding(pd, pd, pd, pd);
-        TextView pt = Ui.text(this, p.publicDexFile(this).getAbsolutePath(), 12, Ui.GREEN_DEEP, false);
+        pathCard.setBackground(Ui.outline(t.accentSoft, t.accent, 12, 1, this));
+        int pd2 = Ui.dp(12);
+        pathCard.setPadding(pd2, pd2, pd2, pd2);
+        TextView pt = Ui.text(this, p.publicDexFile(this).getAbsolutePath(), 12, t.accentDark, false);
         pt.setTypeface(Typeface.MONOSPACE);
         pt.setTextIsSelectable(true);
         pathCard.addView(pt);
         LinearLayout.LayoutParams pcp = new LinearLayout.LayoutParams(-1, -2);
-        pcp.topMargin = Ui.dp(this, 18);
+        pcp.topMargin = Ui.dp(18);
         col.addView(pathCard, pcp);
 
         LinearLayout row1 = new LinearLayout(this);
         TextView copyBtn = Ui.button(this, "📋  Copy Path", Ui.GREEN_DARK);
         row1.addView(copyBtn, rowWeight());
-        if (Build.VERSION.SDK_INT >= 29) {
-            TextView ex = Ui.button(this, "⬇  Export", Ui.GREEN);
-            LinearLayout.LayoutParams elp = rowWeight();
-            elp.leftMargin = Ui.dp(this, 10);
-            row1.addView(ex, elp);
-            ex.setOnClickListener(v -> exportToDownloads(p));
-        }
+        TextView smaliBtn = Ui.button(this, "🧬  Smali", Ui.GREEN);
+        LinearLayout.LayoutParams slp = rowWeight();
+        slp.leftMargin = Ui.dp(10);
+        row1.addView(smaliBtn, slp);
         LinearLayout.LayoutParams r1p = new LinearLayout.LayoutParams(-1, -2);
-        r1p.topMargin = Ui.dp(this, 20);
+        r1p.topMargin = Ui.dp(20);
         col.addView(row1, r1p);
 
         LinearLayout row2 = new LinearLayout(this);
-        TextView shareBtn = Ui.button(this, "↗  Share", Ui.TEXT_SUB);
+        TextView shareBtn = Ui.button(this, "↗  Share", t.textSub);
         row2.addView(shareBtn, rowWeight());
         TextView doneBtn = Ui.button(this, "Done", Ui.GREEN);
         LinearLayout.LayoutParams dlp = rowWeight();
-        dlp.leftMargin = Ui.dp(this, 10);
+        dlp.leftMargin = Ui.dp(10);
         row2.addView(doneBtn, dlp);
         LinearLayout.LayoutParams r2p = new LinearLayout.LayoutParams(-1, -2);
-        r2p.topMargin = Ui.dp(this, 10);
+        r2p.topMargin = Ui.dp(10);
         col.addView(row2, r2p);
 
         copyBtn.setOnClickListener(v ->
                 Ui.copy(this, "dex-path", p.publicDexFile(this).getAbsolutePath()));
+        smaliBtn.setOnClickListener(v -> {
+            Intent i = new Intent(this, DexViewerActivity.class);
+            i.putExtra("id", p.id);
+            startActivity(i);
+        });
         shareBtn.setOnClickListener(v -> {
-    File f = p.publicDexFile(this);
-    if (f.exists()) Ui.shareFile(this, f, p.safeName() + "_classes.dex");
-    else Ui.toast(this, "File missing — try again");
-});
+            File f = p.publicDexFile(this);
+            if (f.exists()) Ui.shareFile(this, f, p.safeName() + "_classes.dex");
+            else Ui.toast(this, "File missing — try again");
+        });
         doneBtn.setOnClickListener(v -> finish());
     }
 
@@ -499,32 +462,31 @@ public class NewProjectActivity extends Activity {
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
         header.setBackground(Ui.gradient(0xFFB91C1C, Ui.RED, 0, this));
-        header.setPadding(Ui.dp(this, 18), Ui.dp(this, 26), Ui.dp(this, 18), Ui.dp(this, 20));
+        header.setPadding(Ui.dp(18), Ui.dp(26), Ui.dp(18), Ui.dp(20));
         TextView back = Ui.text(this, "←  Back", 15, Color.WHITE, true);
         back.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
-        back.setPadding(Ui.dp(this, 14), Ui.dp(this, 8), Ui.dp(this, 14), Ui.dp(this, 8));
+        back.setPadding(Ui.dp(14), Ui.dp(8), Ui.dp(14), Ui.dp(8));
         back.setOnClickListener(v -> resetForm());
         header.addView(back, new LinearLayout.LayoutParams(-2, -2));
         TextView h1 = Ui.text(this, "✖  Build Failed", 20, Color.WHITE, true);
         LinearLayout.LayoutParams h1p = new LinearLayout.LayoutParams(-2, -2);
-        h1p.topMargin = Ui.dp(this, 12);
+        h1p.topMargin = Ui.dp(12);
         header.addView(h1, h1p);
-        header.addView(Ui.text(this,
-                "See the error log below — tap Copy Error to grab it", 12, 0xCCFFFFFF, false));
+        header.addView(Ui.text(this, "Tap Copy Error to grab the full log", 12, 0xCCFFFFFF, false));
         col.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout body = new LinearLayout(this);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.setPadding(Ui.dp(this, 16), Ui.dp(this, 14), Ui.dp(this, 16), Ui.dp(this, 16));
+        body.setPadding(Ui.dp(16), Ui.dp(14), Ui.dp(16), Ui.dp(16));
         col.addView(body, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         ScrollView logScroll = new ScrollView(this);
-        logScroll.setBackground(Ui.fill(0xFFF8FAFC, 12, this));
+        logScroll.setBackground(Ui.fill(t.chipBg, 12, this));
         TextView logTv = Ui.text(this, log, 11.5f, 0xFF7F1D1D, false);
         logTv.setTypeface(Typeface.MONOSPACE);
         logTv.setTextIsSelectable(true);
-        int pd = Ui.dp(this, 12);
-        logTv.setPadding(pd, pd, pd, pd);
+        int pd3 = Ui.dp(12);
+        logTv.setPadding(pd3, pd3, pd3, pd3);
         logScroll.addView(logTv, new ScrollView.LayoutParams(-1, -2));
         body.addView(logScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
 
@@ -533,45 +495,14 @@ public class NewProjectActivity extends Activity {
         row.addView(copyBtn, rowWeight());
         TextView retryBtn = Ui.button(this, "↺  Retry", Ui.GREEN_DARK);
         LinearLayout.LayoutParams rlp = rowWeight();
-        rlp.leftMargin = Ui.dp(this, 10);
+        rlp.leftMargin = Ui.dp(10);
         row.addView(retryBtn, rlp);
         LinearLayout.LayoutParams rp = new LinearLayout.LayoutParams(-1, -2);
-        rp.topMargin = Ui.dp(this, 12);
+        rp.topMargin = Ui.dp(12);
         body.addView(row, rp);
 
         copyBtn.setOnClickListener(v -> Ui.copy(this, "build-error", log));
-        retryBtn.setOnClickListener(v -> {
-            if (currentProject != null) runConvert(currentProject);
-        });
+        retryBtn.setOnClickListener(v -> { if (currentProject != null) runConvert(currentProject); });
         Ui.shake(body);
-    }
-
-    private void exportToDownloads(final Project p) {
-        if (Build.VERSION.SDK_INT < 29) {
-            Ui.toast(this, "Requires Android 10+");
-            return;
-        }
-        try {
-            File dex = p.publicDexFile(this);
-            ContentValues cv = new ContentValues();
-            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, p.safeName() + "_classes.dex");
-            cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
-            cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                    Environment.DIRECTORY_DOWNLOADS + "/Java2Dex");
-            Uri uri = getContentResolver()
-                    .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-            if (uri == null) throw new IOException("insert failed");
-            InputStream in = new FileInputStream(dex);
-            OutputStream out = getContentResolver().openOutputStream(uri);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            out.flush();
-            out.close();
-            in.close();
-            Ui.toast(this, "Exported to Downloads/Java2Dex ✔");
-        } catch (Exception e) {
-            Ui.toast(this, "Export failed: " + e.getMessage());
-        }
     }
 }
