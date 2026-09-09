@@ -8,10 +8,10 @@ import org.jf.dexlib2.iface.Method;
 import org.jf.dexlib2.iface.MethodImplementation;
 import org.jf.dexlib2.iface.instruction.FiveRegisterInstruction;
 import org.jf.dexlib2.iface.instruction.Instruction;
-import org.jf.dexlib2.iface.instruction.InstructionWithReference;
 import org.jf.dexlib2.iface.instruction.NarrowLiteralInstruction;
 import org.jf.dexlib2.iface.instruction.OffsetInstruction;
 import org.jf.dexlib2.iface.instruction.OneRegisterInstruction;
+import org.jf.dexlib2.iface.instruction.ReferenceInstruction;
 import org.jf.dexlib2.iface.instruction.RegisterRangeInstruction;
 import org.jf.dexlib2.iface.instruction.ThreeRegisterInstruction;
 import org.jf.dexlib2.iface.instruction.TwoRegisterInstruction;
@@ -28,7 +28,7 @@ import java.io.FileInputStream;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
-import java.util.Set;
+import java.util.TreeSet;
 
 /** Lightweight smali disassembler built on dexlib2 */
 public final class SmaliGen {
@@ -51,11 +51,26 @@ public final class SmaliGen {
         return out;
     }
 
+    /** collects all string constants referenced by methods (dexlib2-safe) */
     public static List<String> stringList(DexBackedDexFile dex) {
-        Set<String> s = dex.getStrings();
-        List<String> out = new ArrayList<String>(s);
-        Collections.sort(out);
-        return out;
+        TreeSet<String> set = new TreeSet<String>();
+        try {
+            for (ClassDef c : dex.getClasses()) {
+                for (Method m : c.getMethods()) {
+                    MethodImplementation impl = m.getImplementation();
+                    if (impl == null) continue;
+                    for (Instruction ins : impl.getInstructions()) {
+                        if (ins instanceof ReferenceInstruction) {
+                            Reference r = ((ReferenceInstruction) ins).getReference();
+                            if (r instanceof StringReference) {
+                                set.add(((StringReference) r).getString());
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (Throwable ignored) { }
+        return new ArrayList<String>(set);
     }
 
     public static String pretty(String type) {
@@ -103,10 +118,8 @@ public final class SmaliGen {
             MethodImplementation impl = m.getImplementation();
             if (impl != null) {
                 b.append("    .registers ").append(impl.getRegisterCount()).append('\n');
-                                int off = 0;
                 for (Instruction ins : impl.getInstructions()) {
-                    b.append("    ").append(fmt(ins, off)).append('\n');
-                    off += ins.getCodeUnits();
+                    b.append("    ").append(fmt(ins)).append('\n');
                 }
             }
             b.append(".end method\n\n");
@@ -119,31 +132,13 @@ public final class SmaliGen {
         return String.valueOf(v);
     }
 
-       private static String fmt(Instruction ins, int baseOffset) {
+    private static String fmt(Instruction ins) {
         try {
             StringBuilder b = new StringBuilder(ins.getOpcode().name);
 
-            if (ins instanceof OffsetInstruction) {
-                int off = ((OffsetInstruction) ins).getCodeOffset();
-                long target = (long) baseOffset + off;
-                if (ins instanceof TwoRegisterInstruction) {
-                    TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
-                    b.append(" v").append(t.getRegisterA()).append(", v").append(t.getRegisterB());
-                } else if (ins instanceof OneRegisterInstruction) {
-                    b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA());
-                }
-                b.append("  # -> 0x").append(Long.toHexString(target));
-                return b.toString();
-            }
-
-            if (ins instanceof RegisterRangeInstruction && ins instanceof InstructionWithReference) {
-                b.append(' ').append(rangeRegs((RegisterRangeInstruction) ins))
-                        .append(", ").append(refStr(((InstructionWithReference) ins).getReference()));
-                return b.toString();
-            }
-            if (ins instanceof InstructionWithReference) {
+            if (ins instanceof ReferenceInstruction) {
                 b.append(' ').append(simpleRegs(ins))
-                        .append(", ").append(refStr(((InstructionWithReference) ins).getReference()));
+                        .append(", ").append(refStr(((ReferenceInstruction) ins).getReference()));
                 return b.toString();
             }
             if (ins instanceof RegisterRangeInstruction) {
@@ -174,15 +169,35 @@ public final class SmaliGen {
                 }
                 return b.toString();
             }
+            if (ins instanceof OffsetInstruction) {
+                int off = ((OffsetInstruction) ins).getCodeOffset();
+                if (ins instanceof TwoRegisterInstruction) {
+                    TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
+                    b.append(" v").append(t.getRegisterA()).append(", v").append(t.getRegisterB());
+                } else if (ins instanceof OneRegisterInstruction) {
+                    b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA());
+                }
+                b.append("  # +").append(off);
+                return b.toString();
+            }
             if (ins instanceof ThreeRegisterInstruction) {
                 ThreeRegisterInstruction t = (ThreeRegisterInstruction) ins;
                 b.append(" v").append(t.getRegisterA()).append(", v")
                         .append(t.getRegisterB()).append(", v").append(t.getRegisterC());
-            } else if (ins instanceof TwoRegisterInstruction) {
+                return b.toString();
+            }
+            if (ins instanceof TwoRegisterInstruction) {
                 TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
                 b.append(" v").append(t.getRegisterA()).append(", v").append(t.getRegisterB());
-            } else if (ins instanceof OneRegisterInstruction) {
+                return b.toString();
+            }
+            if (ins instanceof OneRegisterInstruction) {
                 b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA());
+                return b.toString();
+            }
+            if (ins instanceof FiveRegisterInstruction) {
+                b.append(' ').append(simpleRegs(ins));
+                return b.toString();
             }
             return b.toString();
         } catch (Throwable t) {
@@ -200,15 +215,11 @@ public final class SmaliGen {
 
     private static String simpleRegs(Instruction ins) {
         if (ins instanceof FiveRegisterInstruction) {
-            int n = 5;
-            try {
-                java.lang.reflect.Method m = ins.getClass().getMethod("getRegisterCount");
-                n = ((Integer) m.invoke(ins)).intValue();
-            } catch (Throwable ignored) { }
+            int count = regCount(ins, 5);
             StringBuilder b = new StringBuilder("{");
-            for (int i = 0; i < n && i < 5; i++) {
+            for (int i = 0; i < count && i < 5; i++) {
                 if (i > 0) b.append(", ");
-                b.append('v').append(((FiveRegisterInstruction) ins).getRegister(i));
+                b.append('v').append(regIndex(ins, i));
             }
             return b.append('}').toString();
         }
@@ -220,6 +231,35 @@ public final class SmaliGen {
             return "v" + ((OneRegisterInstruction) ins).getRegisterA();
         }
         return "";
+    }
+
+    /** safe register count — works across dexlib2 versions */
+    private static int regCount(Object ins, int def) {
+        try {
+            java.lang.reflect.Method m = ins.getClass().getMethod("getRegisterCount");
+            Object r = m.invoke(ins);
+            return ((Integer) r).intValue();
+        } catch (Throwable ignored) { }
+        return def;
+    }
+
+    /** safe register lookup — getRegister(int) OR getRegisterA..E */
+    private static int regIndex(Object ins, int i) {
+        try {
+            java.lang.reflect.Method m = ins.getClass().getMethod("getRegister", int.class);
+            Object r = m.invoke(ins, Integer.valueOf(i));
+            return ((Integer) r).intValue();
+        } catch (Throwable ignored) { }
+        try {
+            String[] names = {"getRegisterA", "getRegisterB", "getRegisterC",
+                    "getRegisterD", "getRegisterE"};
+            if (i >= 0 && i < names.length) {
+                java.lang.reflect.Method m = ins.getClass().getMethod(names[i]);
+                Object r = m.invoke(ins);
+                return ((Integer) r).intValue();
+            }
+        } catch (Throwable ignored) { }
+        return 0;
     }
 
     private static String refStr(Reference r) {
