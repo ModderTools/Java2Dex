@@ -103,8 +103,10 @@ public final class SmaliGen {
             MethodImplementation impl = m.getImplementation();
             if (impl != null) {
                 b.append("    .registers ").append(impl.getRegisterCount()).append('\n');
+                                int off = 0;
                 for (Instruction ins : impl.getInstructions()) {
-                    b.append("    ").append(fmt(ins)).append('\n');
+                    b.append("    ").append(fmt(ins, off)).append('\n');
+                    off += ins.getCodeUnits();
                 }
             }
             b.append(".end method\n\n");
@@ -117,13 +119,13 @@ public final class SmaliGen {
         return String.valueOf(v);
     }
 
-    private static String fmt(Instruction ins) {
+       private static String fmt(Instruction ins, int baseOffset) {
         try {
             StringBuilder b = new StringBuilder(ins.getOpcode().name);
 
             if (ins instanceof OffsetInstruction) {
                 int off = ((OffsetInstruction) ins).getCodeOffset();
-                long target = (long) ins.getLocation() + off;
+                long target = (long) baseOffset + off;
                 if (ins instanceof TwoRegisterInstruction) {
                     TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
                     b.append(" v").append(t.getRegisterA()).append(", v").append(t.getRegisterB());
