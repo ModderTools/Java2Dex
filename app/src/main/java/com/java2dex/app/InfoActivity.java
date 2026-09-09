@@ -191,7 +191,7 @@ public class InfoActivity extends Activity {
         body.addView(foot);
     }
 
-    private TextView stat(String num, String label) {
+        private LinearLayout stat(String num, String label) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setGravity(Gravity.CENTER);
