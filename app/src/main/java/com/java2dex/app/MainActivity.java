@@ -176,22 +176,26 @@ public class MainActivity extends Activity {
         TextView ql = Ui.text(this, "QUICK ACTIONS", 10.5f, t.textSub, true);
         quickWrap.addView(ql);
 
-        LinearLayout row1 = new LinearLayout(this);
+                LinearLayout row1 = new LinearLayout(this);
         LinearLayout.LayoutParams r1p = new LinearLayout.LayoutParams(-1, -2);
         r1p.topMargin = Ui.dp(8);
         row1.addView(quickCard("➕", "New Project", "import or write code", v ->
-                startActivity(new Intent(this, NewProjectActivity.class))));
+                startActivity(new Intent(this, NewProjectActivity.class))), weight());
+        LinearLayout.LayoutParams r1b = weight();
+        r1b.leftMargin = Ui.dp(10);
         row1.addView(quickCard("🧠", "Code IDE", "write & edit java files", v ->
-                openIdeQuick()));
+                openIdeQuick()), r1b);
         quickWrap.addView(row1, r1p);
 
         LinearLayout row2 = new LinearLayout(this);
         LinearLayout.LayoutParams r2p = new LinearLayout.LayoutParams(-1, -2);
         r2p.topMargin = Ui.dp(10);
         row2.addView(quickCard("🧪", "Sample", "load demo & convert", v ->
-                createSampleAndOpen()));
+                createSampleAndOpen()), weight());
+        LinearLayout.LayoutParams r2b = weight();
+        r2b.leftMargin = Ui.dp(10);
         row2.addView(quickCard("📂", "Output", "see save location", v ->
-                showOutputInfo()));
+                showOutputInfo()), r2b);
         quickWrap.addView(row2, r2p);
 
         // ---------- search ----------
@@ -350,6 +354,10 @@ public class MainActivity extends Activity {
         Ui.pressScale(b, 0.9f);
         return b;
     }
+        
+        private LinearLayout.LayoutParams weight() {
+        return new LinearLayout.LayoutParams(0, -2, 1f);
+    }
 
     private TextView statCard(LinearLayout parent, String label) {
         LinearLayout card = new LinearLayout(this);
@@ -396,12 +404,7 @@ public class MainActivity extends Activity {
         card.setOnClickListener(l);
         Ui.pressScale(card, 0.96f);
 
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
-        if (((LinearLayout) card.getParent()) != null && card.getParent() instanceof LinearLayout
-                && ((LinearLayout) card.getParent()).getChildCount() > 0) {
-            lp.leftMargin = Ui.dp(10);
-        }
-        return card;
+                return card;
     }
 
     private void openIdeQuick() {
