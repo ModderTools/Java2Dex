@@ -668,7 +668,7 @@ public class MainActivity extends Activity {
             wrap.addView(card, new FrameLayout.LayoutParams(-1, -2));
             LinearLayout outer = new LinearLayout(MainActivity.this);
             outer.addView(wrap, new LinearLayout.LayoutParams(-1, -2));
-            LinearLayout.LayoutParams op = (LinearLayout.LayoutParams) outer.getLayoutParams();
+            LinearLayout.LayoutParams op = new LinearLayout.LayoutParams(-1, -2);
             op.bottomMargin = Ui.dp(10);
             outer.setLayoutParams(op);
             return outer;
