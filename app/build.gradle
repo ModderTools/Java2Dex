@@ -10,8 +10,8 @@ android {
         applicationId 'com.java2dex.app'
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName '1.0'
+        versionCode 2
+        versionName '2.0'
     }
 
     buildTypes {
@@ -29,7 +29,8 @@ android {
         resources {
             excludes += ['META-INF/*.SF', 'META-INF/*.DSA', 'META-INF/*.RSA',
                          'META-INF/*.EC', 'META-INF/versions/**',
-                         'META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/NOTICE']
+                         'META-INF/DEPENDENCIES', 'META-INF/LICENSE', 'META-INF/NOTICE',
+                         'META-INF/INDEX.LIST', 'META-INF/AL2.0', 'META-INF/LGPL2.1']
         }
     }
 }
@@ -39,7 +40,10 @@ tasks.withType(JavaCompile).configureEach {
 }
 
 dependencies {
-    // Java compiler (runs on device) + DEX converter (runs on device)
     implementation 'org.eclipse.jdt.core.compiler:ecj:4.6.1'
     implementation 'com.android.tools:r8:2.1.75'
+    // dexlib2 for smali viewer — guava excluded (r8 already bundles it, avoids duplicate class error)
+    implementation('org.smali:dexlib2:2.5.2') {
+        exclude group: 'com.google.guava'
+    }
 }
