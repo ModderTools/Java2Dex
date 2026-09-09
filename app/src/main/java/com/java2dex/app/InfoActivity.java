@@ -1,6 +1,7 @@
 package com.java2dex.app;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
@@ -13,7 +14,6 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.app.AlertDialog;
 
 public class InfoActivity extends Activity {
 
@@ -32,6 +32,8 @@ public class InfoActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.topMargin = Ui.dp(14);
         return lp;
+    }
+
     private LinearLayout.LayoutParams w() {
         return new LinearLayout.LayoutParams(0, -2, 1f);
     }
@@ -199,8 +201,6 @@ public class InfoActivity extends Activity {
         TextView l = Ui.text(this, label, 10, t.textSub, false);
         l.setGravity(Gravity.CENTER);
         c.addView(l);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
-        c.setLayoutParams(lp);
         return c;
     }
 
