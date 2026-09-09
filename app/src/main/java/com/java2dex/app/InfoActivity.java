@@ -32,6 +32,8 @@ public class InfoActivity extends Activity {
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
         lp.topMargin = Ui.dp(14);
         return lp;
+    private LinearLayout.LayoutParams w() {
+        return new LinearLayout.LayoutParams(0, -2, 1f);
     }
 
     private LinearLayout card() {
