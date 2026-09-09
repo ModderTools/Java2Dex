@@ -3,6 +3,7 @@ package com.java2dex.app;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
@@ -34,25 +35,21 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Locale;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
-/** UI toolkit : colors, shapes, animations, helpers — all in pure Java */
 public class Ui {
 
     public static final int GREEN       = 0xFF16A34A;
     public static final int GREEN_DARK  = 0xFF15803D;
     public static final int GREEN_DEEP  = 0xFF14532D;
     public static final int GREEN_LIGHT = 0xFFDCFCE7;
-    public static final int GREEN_BG    = 0xFFF0FDF4;
     public static final int WHITE       = 0xFFFFFFFF;
-    public static final int TEXT        = 0xFF0F172A;
-    public static final int TEXT_SUB    = 0xFF64748B;
-    public static final int RED         = 0xFFDC2626;
-    public static final int RED_LIGHT   = 0xFFFEE2E2;
-    public static final int STROKE      = 0xFFE2E8F0;
 
     private Ui() {}
 
@@ -96,13 +93,13 @@ public class Ui {
         return t;
     }
 
-    public static EditText input(Context c, String hint) {
+    public static EditText input(Context c, String hint, Theme t) {
         EditText e = new EditText(c);
         e.setHint(hint);
         e.setTextSize(14);
-        e.setTextColor(TEXT);
-        e.setHintTextColor(0xFF94A3B8);
-        e.setBackground(outline(WHITE, STROKE, 12, 1.2f, c));
+        e.setTextColor(t.text);
+        e.setHintTextColor(t.textSub);
+        e.setBackground(outline(t.inputBg, t.cardStroke, 12, 1.2f, c));
         e.setPadding(dp(c, 14), dp(c, 12), dp(c, 14), dp(c, 12));
         e.setSingleLine(true);
         return e;
@@ -133,6 +130,27 @@ public class Ui {
         });
     }
 
+    public static LinearLayout header(final Activity a, String title, String sub, boolean withBack) {
+        LinearLayout h = new LinearLayout(a);
+        h.setOrientation(LinearLayout.VERTICAL);
+        h.setBackground(gradient(GREEN_DEEP, GREEN, 0, a));
+        h.setPadding(dp(a, 18), dp(a, 26), dp(a, 18), dp(a, 22));
+        if (withBack) {
+            TextView back = text(a, "←  Back", 15, WHITE, true);
+            back.setBackground(ripple(a, fill(0x33FFFFFF, 12, a)));
+            back.setPadding(dp(a, 14), dp(a, 8), dp(a, 14), dp(a, 8));
+            back.setOnClickListener(v -> a.finish());
+            h.addView(back, new LinearLayout.LayoutParams(-2, -2));
+        }
+        TextView t1 = text(a, title, 22, WHITE, true);
+        t1.setSingleLine(true);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, -2);
+        p.topMargin = dp(a, withBack ? 14 : 0);
+        h.addView(t1, p);
+        if (sub != null) h.addView(text(a, sub, 12, 0xB3FFFFFF, false));
+        return h;
+    }
+
     public static void copy(Context c, String label, String value) {
         ClipboardManager cm = (ClipboardManager) c.getSystemService(Context.CLIPBOARD_SERVICE);
         if (cm != null) {
@@ -145,12 +163,14 @@ public class Ui {
         Toast.makeText(c, m, Toast.LENGTH_SHORT).show();
     }
 
-    /**
-     * Shares the REAL file.
-     * Android 10+ : file is registered into MediaStore (Downloads/Java2Dex) and
-     *               shared as a content:// URI — every app can read it.
-     * Android 8-9 : shares the file directly from /storage/emulated/0/Java2Dex.
-     */
+    public static void shareText(Activity a, String subject, String text) {
+        Intent s = new Intent(Intent.ACTION_SEND);
+        s.setType("text/plain");
+        s.putExtra(Intent.EXTRA_SUBJECT, subject);
+        s.putExtra(Intent.EXTRA_TEXT, text);
+        a.startActivity(Intent.createChooser(s, "Share"));
+    }
+
     public static void shareFile(Activity act, File file, String name) {
         if (act == null || file == null || !file.exists()) {
             if (act != null) toast(act, "File not found — convert first");
@@ -177,16 +197,12 @@ public class Ui {
                 Intent s = new Intent(Intent.ACTION_SEND);
                 s.setType("application/octet-stream");
                 s.putExtra(Intent.EXTRA_STREAM, uri);
-                s.putExtra(Intent.EXTRA_SUBJECT, name);
                 s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                 act.startActivity(Intent.createChooser(s, "Share DEX file"));
                 return;
-            } catch (Exception ignored) {
-                // fall through to direct share
-            }
+            } catch (Exception ignored) { }
         }
         try {
-            // Android 8/9: allow file:// URIs to leave the app
             java.lang.reflect.Method m = StrictMode.class
                     .getMethod("disableDeathOnFileUriExposure");
             m.invoke(null);
@@ -196,6 +212,31 @@ public class Ui {
         s.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(file));
         s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
         act.startActivity(Intent.createChooser(s, "Share DEX file"));
+    }
+
+    /** extracts only .java files from a zip (zip-slip protected) */
+    public static void unzipJava(File zip, File destDir) throws IOException {
+        ZipInputStream zis = new ZipInputStream(new FileInputStream(zip));
+        try {
+            ZipEntry e;
+            while ((e = zis.getNextEntry()) != null) {
+                if (e.isDirectory()) continue;
+                String name = e.getName().replace("\\", "/");
+                if (name.contains("..")) continue;
+                while (name.startsWith("/")) name = name.substring(1);
+                if (!name.toLowerCase().endsWith(".java")) continue;
+                File out = new File(destDir, name);
+                File parent = out.getParentFile();
+                if (parent != null) parent.mkdirs();
+                FileOutputStream fo = new FileOutputStream(out);
+                byte[] buf = new byte[8192];
+                int n;
+                while ((n = zis.read(buf)) > 0) fo.write(buf, 0, n);
+                fo.close();
+            }
+        } finally {
+            zis.close();
+        }
     }
 
     public static void popIn(View v, long delay) {
@@ -236,7 +277,6 @@ public class Ui {
         return String.format(Locale.US, "%.2f MB", bytes / 1048576f);
     }
 
-    /** Animated success checkmark (custom drawn) */
     public static class SuccessView extends View {
 
         private final Paint halo = new Paint(Paint.ANTI_ALIAS_FLAG);
