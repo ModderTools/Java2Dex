@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission
         android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
@@ -10,6 +11,7 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
 
     <application
+        android:icon="@drawable/logo"
         android:label="Java2Dex"
         android:allowBackup="true"
         android:requestLegacyExternalStorage="true"
@@ -24,14 +26,14 @@
             </intent-filter>
         </activity>
 
-        <activity
-            android:name=".NewProjectActivity"
-            android:exported="false"
+        <activity android:name=".NewProjectActivity" android:exported="false"
             android:windowSoftInputMode="adjustResize" />
-
-        <activity
-            android:name=".DetailActivity"
-            android:exported="false" />
+        <activity android:name=".DetailActivity" android:exported="false" />
+        <activity android:name=".IdeActivity" android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".DexViewerActivity" android:exported="false" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
+        <activity android:name=".InfoActivity" android:exported="false" />
     </application>
 
 </manifest>
