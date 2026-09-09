@@ -15,7 +15,6 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** Project model + storage (SharedPreferences JSON) + path helpers */
 public class Project {
 
     public static final int ST_NONE = 0, ST_OK = 1, ST_ERROR = 2;
@@ -26,8 +25,6 @@ public class Project {
     public long builtAt;
     public int status = ST_NONE;
     public long dexSize;
-
-    // ---------------- storage ----------------
 
     private static SharedPreferences prefs(Context c) {
         return c.getApplicationContext().getSharedPreferences("j2d_projects", Context.MODE_PRIVATE);
@@ -42,7 +39,6 @@ public class Project {
         return out;
     }
 
-    /** newest first */
     public static List<Project> all(Context c) {
         List<Project> out = allInOrder(c);
         Collections.reverse(out);
@@ -77,6 +73,10 @@ public class Project {
         List<Project> keep = new ArrayList<>();
         for (Project x : list) if (!x.id.equals(id)) keep.add(x);
         saveAll(c, keep);
+    }
+
+    public static void clearAll(Context c) {
+        prefs(c).edit().clear().apply();
     }
 
     private static void saveAll(Context c, List<Project> list) {
@@ -116,16 +116,14 @@ public class Project {
         f.delete();
     }
 
-    // ---------------- paths ----------------
-
     public File dir(Context c)        { return new File(new File(c.getFilesDir(), "projects"), id); }
     public File srcDir(Context c)     { return new File(dir(c), "src"); }
     public File libsDir(Context c)    { return new File(dir(c), "libs"); }
     public File classesDir(Context c) { return new File(dir(c), "classes"); }
     public File dexTmpDir(Context c)  { return new File(dir(c), "dexout"); }
     public File logFile(Context c)    { return new File(dir(c), "build.log.txt"); }
+    public File internalDexFile(Context c) { return new File(dexTmpDir(c), "classes.dex"); }
 
-    /** Java2Dex/<project>/classes.dex — public storage: /storage/emulated/0/Java2Dex */
     public File publicDexDir(Context c) {
         File f = new File(java2dexRoot(c), safeName());
         if (!f.exists()) f.mkdirs();
@@ -133,20 +131,25 @@ public class Project {
     }
 
     public File publicDexFile(Context c) { return new File(publicDexDir(c), "classes.dex"); }
+    public File smaliDir(Context c)      { return new File(publicDexDir(c), "smali"); }
 
     public String safeName() {
         String s = name == null ? "" : name.trim().replaceAll("[^A-Za-z0-9._-]", "_");
         return s.length() == 0 ? "project" : s;
     }
 
-    /** /storage/emulated/0/Java2Dex — auto-generated (needs storage permission) */
+    /** custom folder if chosen in Settings, else /storage/emulated/0/Java2Dex */
     public static File java2dexRoot(Context c) {
-        File f = new File(Environment.getExternalStorageDirectory(), "Java2Dex");
+        String custom = Prefs.folder(c);
+        File f;
+        if (custom != null && custom.trim().length() > 0) {
+            f = new File(custom.trim());
+        } else {
+            f = new File(Environment.getExternalStorageDirectory(), "Java2Dex");
+        }
         if (!f.exists()) f.mkdirs();
         return f;
     }
-
-    // ---------------- text ----------------
 
     public String createdText() { return fmt(createdAt); }
 
