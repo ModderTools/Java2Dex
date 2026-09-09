@@ -3,7 +3,6 @@ package com.java2dex.app;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
@@ -30,9 +29,9 @@ import android.view.animation.AccelerateDecelerateInterpolator;
 import android.view.animation.DecelerateInterpolator;
 import android.view.animation.OvershootInterpolator;
 import android.widget.EditText;
+import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
-import android.widget.LinearLayout;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -50,24 +49,26 @@ public class Ui {
     public static final int GREEN_DARK  = 0xFF15803D;
     public static final int GREEN_DEEP  = 0xFF14532D;
     public static final int GREEN_LIGHT = 0xFFDCFCE7;
+    public static final int RED         = 0xFFDC2626;
+    public static final int RED_LIGHT   = 0xFFFEE2E2;
     public static final int WHITE       = 0xFFFFFFFF;
 
-    private Ui() {}
+    private static Context appContext;
 
-        private static Context appContext;
+    private Ui() {}
 
     /** called once from App (Application class) */
     public static void init(Context c) {
         if (appContext == null) appContext = c.getApplicationContext();
     }
 
+    public static int dp(Context c, float v) {
+        return Math.round(v * c.getResources().getDisplayMetrics().density);
+    }
+
     /** short dp without context — uses app context */
     public static int dp(float v) {
         return Math.round(v * appContext.getResources().getDisplayMetrics().density);
-    }
-
-    public static int dp(Context c, float v) {
-        return Math.round(v * c.getResources().getDisplayMetrics().density);
     }
 
     public static GradientDrawable fill(int color, float radiusDp, Context c) {
@@ -129,17 +130,20 @@ public class Ui {
 
     public static void pressScale(final View v, final float down) {
         v.setClickable(true);
-        v.setOnTouchListener((view, event) -> {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    view.animate().scaleX(down).scaleY(down).setDuration(80).start();
-                    break;
-                case MotionEvent.ACTION_UP:
-                case MotionEvent.ACTION_CANCEL:
-                    view.animate().scaleX(1f).scaleY(1f).setDuration(140).start();
-                    break;
+        v.setOnTouchListener(new View.OnTouchListener() {
+            @Override
+            public boolean onTouch(View view, MotionEvent event) {
+                switch (event.getActionMasked()) {
+                    case MotionEvent.ACTION_DOWN:
+                        view.animate().scaleX(down).scaleY(down).setDuration(80).start();
+                        break;
+                    case MotionEvent.ACTION_UP:
+                    case MotionEvent.ACTION_CANCEL:
+                        view.animate().scaleX(1f).scaleY(1f).setDuration(140).start();
+                        break;
+                }
+                return false;
             }
-            return false;
         });
     }
 
@@ -152,7 +156,9 @@ public class Ui {
             TextView back = text(a, "←  Back", 15, WHITE, true);
             back.setBackground(ripple(a, fill(0x33FFFFFF, 12, a)));
             back.setPadding(dp(a, 14), dp(a, 8), dp(a, 14), dp(a, 8));
-            back.setOnClickListener(v -> a.finish());
+            back.setOnClickListener(new View.OnClickListener() {
+                @Override public void onClick(View v) { a.finish(); }
+            });
             h.addView(back, new LinearLayout.LayoutParams(-2, -2));
         }
         TextView t1 = text(a, title, 22, WHITE, true);
@@ -278,7 +284,12 @@ public class Ui {
     public static void countUp(final TextView t, int to) {
         ValueAnimator a = ValueAnimator.ofInt(0, to);
         a.setDuration(650);
-        a.addUpdateListener(anim -> t.setText(String.valueOf((Integer) anim.getAnimatedValue())));
+        a.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+            @Override
+            public void onAnimationUpdate(ValueAnimator anim) {
+                t.setText(String.valueOf((Integer) anim.getAnimatedValue()));
+            }
+        });
         a.start();
     }
 
@@ -321,9 +332,12 @@ public class Ui {
             a.setDuration(950);
             a.setStartDelay(120);
             a.setInterpolator(new AccelerateDecelerateInterpolator());
-            a.addUpdateListener(anim -> {
-                progress = (Float) anim.getAnimatedValue();
-                invalidate();
+            a.addUpdateListener(new ValueAnimator.AnimatorUpdateListener() {
+                @Override
+                public void onAnimationUpdate(ValueAnimator anim) {
+                    progress = (Float) anim.getAnimatedValue();
+                    invalidate();
+                }
             });
             a.start();
         }
