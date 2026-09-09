@@ -32,6 +32,7 @@ import android.view.animation.OvershootInterpolator;
 import android.widget.EditText;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.LinearLayout;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -52,6 +53,18 @@ public class Ui {
     public static final int WHITE       = 0xFFFFFFFF;
 
     private Ui() {}
+
+        private static Context appContext;
+
+    /** called once from App (Application class) */
+    public static void init(Context c) {
+        if (appContext == null) appContext = c.getApplicationContext();
+    }
+
+    /** short dp without context — uses app context */
+    public static int dp(float v) {
+        return Math.round(v * appContext.getResources().getDisplayMetrics().density);
+    }
 
     public static int dp(Context c, float v) {
         return Math.round(v * c.getResources().getDisplayMetrics().density);
