@@ -2,7 +2,6 @@ package com.java2dex.app;
 
 import android.app.Activity;
 import android.app.AlertDialog;
-import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -14,6 +13,7 @@ import android.widget.BaseAdapter;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.ListView;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -81,20 +81,20 @@ public class DexViewerActivity extends Activity {
         hc.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams hclp = new LinearLayout.LayoutParams(0, -2, 1f);
         hclp.leftMargin = Ui.dp(10);
-        hc.addView(Ui.text(this, "🧬  DEX Explorer", 17, Color.WHITE, true));
+        hc.addView(Ui.text(this, "DEX Explorer", 17, Color.WHITE, true));
         hc.addView(Ui.text(this, p.name, 11, 0xB3FFFFFF, false));
         hr.addView(hc, hclp);
         header.addView(hr, new LinearLayout.LayoutParams(-1, -2));
 
         LinearLayout btnRow = new LinearLayout(this);
         btnRow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView saveAll = Ui.text(this, "💾 Save All Smali", 12, Color.WHITE, true);
+        TextView saveAll = Ui.text(this, "Save All Smali", 12, Color.WHITE, true);
         saveAll.setBackground(Ui.ripple(this, Ui.fill(0x40FFFFFF, 10, this)));
         saveAll.setPadding(Ui.dp(12), Ui.dp(8), Ui.dp(12), Ui.dp(8));
         saveAll.setOnClickListener(v -> saveAllSmali());
         btnRow.addView(saveAll, new LinearLayout.LayoutParams(-2, -2));
 
-        TextView reload = Ui.text(this, "↺ Reload", 12, Color.WHITE, true);
+        TextView reload = Ui.text(this, "Reload", 12, Color.WHITE, true);
         reload.setBackground(Ui.ripple(this, Ui.fill(0x40FFFFFF, 10, this)));
         reload.setPadding(Ui.dp(12), Ui.dp(8), Ui.dp(12), Ui.dp(8));
         LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
@@ -121,12 +121,10 @@ public class DexViewerActivity extends Activity {
 
         LinearLayout tabs = new LinearLayout(this);
         tabs.setPadding(Ui.dp(16), 0, Ui.dp(16), Ui.dp(8));
-        TextView tb1 = Ui.button(this, "🏫  Classes", Ui.GREEN);
-        tb1.setId(1);
+        TextView tb1 = Ui.button(this, "Classes", Ui.GREEN);
         tb1.setOnClickListener(v -> { showStrings = false; applyTabs(); filter(); });
         tabs.addView(tb1, rowWeight());
-        TextView tb2 = Ui.button(this, "🔤  Strings", t.textSub);
-        tb2.setId(2);
+        TextView tb2 = Ui.button(this, "Strings", t.textSub);
         LinearLayout.LayoutParams t2p = rowWeight();
         t2p.leftMargin = Ui.dp(10);
         tb2.setLayoutParams(t2p);
@@ -134,7 +132,7 @@ public class DexViewerActivity extends Activity {
         tabs.addView(tb2);
         body.addView(tabs, new LinearLayout.LayoutParams(-1, -2));
 
-        search = Ui.input(this, "🔍  Filter…", t);
+        search = Ui.input(this, "Filter…", t);
         LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
         sp.setMargins(Ui.dp(16), 0, Ui.dp(16), Ui.dp(8));
         search.setLayoutParams(sp);
@@ -234,8 +232,8 @@ public class DexViewerActivity extends Activity {
                     new AlertDialog.Builder(this)
                             .setTitle(name)
                             .setView(sc)
-                            .setPositiveButton("📋 Copy", (d, w) -> Ui.copy(this, "smali", code))
-                            .setNeutralButton("↗ Share", (d, w) ->
+                            .setPositiveButton("Copy", (d, w) -> Ui.copy(this, "smali", code))
+                            .setNeutralButton("Share", (d, w) ->
                                     Ui.shareText(this, name + ".smali", code))
                             .setNegativeButton("Close", null)
                             .show();
@@ -288,7 +286,7 @@ public class DexViewerActivity extends Activity {
             card.setPadding(pd, pd, pd, pd);
             String s = shown.get(position);
             TextView tv = Ui.text(DexViewerActivity.this,
-                    (showStrings ? "🔤 " : "🏫 ") + s,
+                    (showStrings ? "[S] " : "[C] ") + s,
                     12, showStrings ? t.textSub : t.text, false);
             tv.setTypeface(showStrings ? Typeface.MONOSPACE : Typeface.DEFAULT);
             tv.setSingleLine(true);
