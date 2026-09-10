@@ -39,7 +39,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-/** On-device code IDE: files, folders, editor with highlighting, find, snippets, convert */
+/** AIDE-style code IDE: ☰ full-screen explorer, white code sheet, dark chrome */
 public class IdeActivity extends Activity {
 
     private static final int REQ_IMPORT = 51;
@@ -57,8 +57,8 @@ public class IdeActivity extends Activity {
     private Project p;
     private ListView filesList;
     private EditText editor;
-    private TextView filePathLabel, metaLabel;
-    private LinearLayout overlay;
+    private TextView fileTitle, metaLabel, explorerSub;
+    private LinearLayout explorer, overlay;
     private TextView overlayStatus;
 
     private final List<Object[]> entries = new ArrayList<>();
@@ -77,14 +77,27 @@ public class IdeActivity extends Activity {
         p = id != null ? Project.byId(this, id) : null;
         if (p == null) { finish(); return; }
         p.srcDir(this).mkdirs();
+        ensureDefaultFile();
         wrapOn = Prefs.wrap(this);
         buildUi();
         refreshFiles();
         openFirstFile();
     }
 
-    private LinearLayout.LayoutParams rowWeight() {
-        return new LinearLayout.LayoutParams(0, -2, 1f);
+    private void ensureDefaultFile() {
+        File[] fs = p.srcDir(this).listFiles();
+        boolean hasJava = false;
+        if (fs != null) for (File f : fs) {
+            if (f.getName().toLowerCase().endsWith(".java")) { hasJava = true; break; }
+        }
+        if (!hasJava) {
+            try {
+                File f = new File(p.srcDir(this), "Main.java");
+                FileWriter w = new FileWriter(f);
+                w.write("public class Main {\n    public static void main(String[] args) {\n        \n    }\n}\n");
+                w.close();
+            } catch (Throwable ignored) { }
+        }
     }
 
     private void buildUi() {
@@ -96,79 +109,50 @@ public class IdeActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         base.addView(root, new FrameLayout.LayoutParams(-1, -1));
 
-        // header
+        // ================= header (dark) =================
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
         header.setBackground(Ui.gradient(Ui.GREEN_DEEP, Ui.GREEN, 0, this));
-        header.setPadding(Ui.dp(16), Ui.dp(24), Ui.dp(16), Ui.dp(14));
+        header.setPadding(Ui.dp(12), Ui.dp(20), Ui.dp(12), Ui.dp(12));
 
         LinearLayout hrow = new LinearLayout(this);
         hrow.setGravity(Gravity.CENTER_VERTICAL);
-        TextView back = Ui.text(this, "←", 20, Color.WHITE, true);
-        back.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
-        back.setPadding(Ui.dp(12), Ui.dp(6), Ui.dp(12), Ui.dp(6));
-        back.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { finish(); }
-        });
-        hrow.addView(back, new LinearLayout.LayoutParams(-2, -2));
+
+        TextView menu = Ui.text(this, "☰", 20, Color.WHITE, true);
+        menu.setGravity(Gravity.CENTER);
+        menu.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
+        menu.setPadding(Ui.dp(14), Ui.dp(7), Ui.dp(14), Ui.dp(7));
+        menu.setOnClickListener(v -> toggleExplorer());
+        hrow.addView(menu, new LinearLayout.LayoutParams(-2, -2));
 
         LinearLayout hcol = new LinearLayout(this);
         hcol.setOrientation(LinearLayout.VERTICAL);
         LinearLayout.LayoutParams hclp = new LinearLayout.LayoutParams(0, -2, 1f);
-        hclp.leftMargin = Ui.dp(10);
-        hcol.addView(Ui.text(this, "Code IDE", 17, Color.WHITE, true));
-        hcol.addView(Ui.text(this, p.name, 11, 0xB3FFFFFF, false));
+        hclp.leftMargin = Ui.dp(12);
+        fileTitle = Ui.text(this, "Java2Dex IDE", 16.5f, Color.WHITE, true);
+        fileTitle.setSingleLine(true);
+        hcol.addView(fileTitle);
+        hcol.addView(Ui.text(this, p.name + "  •  tap ☰ for files", 10.5f, 0xB3FFFFFF, false));
         hrow.addView(hcol, hclp);
+
+        TextView saveTop = Ui.text(this, "💾", 17, Color.WHITE, false);
+        saveTop.setGravity(Gravity.CENTER);
+        saveTop.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
+        saveTop.setPadding(Ui.dp(13), Ui.dp(7), Ui.dp(13), Ui.dp(7));
+        saveTop.setOnClickListener(v -> {
+            saveCurrent();
+            Ui.toast(this, "Saved ✔");
+        });
+        hrow.addView(saveTop, new LinearLayout.LayoutParams(-2, -2));
+
         header.addView(hrow, new LinearLayout.LayoutParams(-1, -2));
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
-        // main split
-        LinearLayout main = new LinearLayout(this);
-        main.setOrientation(LinearLayout.HORIZONTAL);
-        LinearLayout.LayoutParams mainLp = new LinearLayout.LayoutParams(-1, 0, 1f);
-        mainLp.topMargin = Ui.dp(8);
-        root.addView(main, mainLp);
-
-        // files panel
-        LinearLayout filesPanel = new LinearLayout(this);
-        filesPanel.setOrientation(LinearLayout.VERTICAL);
-        filesPanel.setBackground(Ui.fill(t.card, 0, this));
-        main.addView(filesPanel, new LinearLayout.LayoutParams(Ui.dp(140), -1));
-
-        TextView fh = Ui.text(this, "  FILES", 10, t.textSub, true);
-        filesPanel.addView(fh, new LinearLayout.LayoutParams(-1, -2));
-
-        filesList = new ListView(this);
-        filesList.setDivider(null);
-        filesList.setDividerHeight(Ui.dp(2));
-        filesList.setAdapter(new FilesAdapter());
-        filesList.setOnItemClickListener(new android.widget.AdapterView.OnItemClickListener() {
-            @Override public void onItemClick(android.widget.AdapterView<?> parent,
-                                              View v, int pos, long id2) {
-                onFileTap(pos);
-            }
-        });
-        filesList.setOnItemLongClickListener(new android.widget.AdapterView.OnItemLongClickListener() {
-            @Override public boolean onItemLongClick(android.widget.AdapterView<?> parent,
-                                                     View v, int pos, long id2) {
-                fileOptions(pos);
-                return true;
-            }
-        });
-        filesPanel.addView(filesList, new LinearLayout.LayoutParams(-1, 0, 1f));
-
-        // editor panel
-        LinearLayout edCol = new LinearLayout(this);
-        edCol.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout.LayoutParams edLp = new LinearLayout.LayoutParams(0, -1, 1f);
-        edLp.leftMargin = Ui.dp(6);
-        main.addView(edCol, edLp);
-
-        filePathLabel = Ui.text(this, "no file open", 11, t.textSub, true);
-        filePathLabel.setSingleLine(true);
-        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2);
-        fp.leftMargin = Ui.dp(4);
-        edCol.addView(filePathLabel, fp);
+        // ================= white code sheet =================
+        FrameLayout sheet = new FrameLayout(this);
+        sheet.setBackground(Ui.outline(
+                Prefs.dark(this) ? t.card : Color.WHITE, t.cardStroke, 16, 1, this));
+        sheet.setElevation(Ui.dp(3));
 
         editor = new EditText(this);
         editor.setTypeface(Typeface.MONOSPACE);
@@ -182,7 +166,7 @@ public class IdeActivity extends Activity {
                 | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         editor.setHorizontallyScrolling(!wrapOn);
         editor.setGravity(Gravity.TOP);
-        int ep = Ui.dp(8);
+        int ep = Ui.dp(14);
         editor.setPadding(ep, ep, ep, ep);
         editor.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
@@ -192,64 +176,107 @@ public class IdeActivity extends Activity {
                 updateMeta();
             }
         });
-        edCol.addView(editor, new LinearLayout.LayoutParams(-1, 0, 1f));
+        sheet.addView(editor, new FrameLayout.LayoutParams(-1, -1));
 
-        metaLabel = Ui.text(this, "Ln 1  •  font " + Prefs.fontSize(this), 10, t.textSub, false);
-        metaLabel.setGravity(Gravity.END);
-        edCol.addView(metaLabel, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams sheetLp = new LinearLayout.LayoutParams(-1, 0, 1f);
+        sheetLp.setMargins(Ui.dp(10), Ui.dp(10), Ui.dp(10), Ui.dp(6));
+        root.addView(sheet, sheetLp);
 
-        // toolbar
+        // ================= meta strip (dark) =================
+        metaLabel = Ui.text(this, "Ln 1, Col 1", 10, t.textSub, false);
+        metaLabel.setSingleLine(true);
+        metaLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        metaLabel.setBackground(Ui.fill(t.chipBg, 8, this));
+        metaLabel.setPadding(Ui.dp(12), Ui.dp(5), Ui.dp(12), Ui.dp(5));
+        LinearLayout.LayoutParams metaLp = new LinearLayout.LayoutParams(-1, -2);
+        metaLp.setMargins(Ui.dp(10), 0, Ui.dp(10), Ui.dp(6));
+        root.addView(metaLabel, metaLp);
+
+        // ================= toolbar (dark strip) =================
+        LinearLayout toolStrip = new LinearLayout(this);
+        toolStrip.setOrientation(LinearLayout.VERTICAL);
+        toolStrip.setBackgroundColor(0xFF0B1F12);
+
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
+        hs.setFillViewport(true);
         LinearLayout bar = new LinearLayout(this);
         bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setPadding(Ui.dp(8), Ui.dp(6), Ui.dp(8), Ui.dp(8));
+        bar.setPadding(Ui.dp(8), Ui.dp(7), Ui.dp(8), Ui.dp(9));
         hs.addView(bar, new HorizontalScrollView.LayoutParams(-2, -2));
 
-        bar.addView(toolBtn("💾 Save", new View.OnClickListener() {
-            @Override public void onClick(View v) { saveCurrent(); Ui.toast(IdeActivity.this, "Saved"); }
-        }));
-        bar.addView(toolBtn("➕ File", new View.OnClickListener() {
-            @Override public void onClick(View v) { newFileDialog(); }
-        }));
-        bar.addView(toolBtn("📁 Folder", new View.OnClickListener() {
-            @Override public void onClick(View v) { newFolderDialog(); }
-        }));
-        bar.addView(toolBtn("📥 Import", new View.OnClickListener() {
-            @Override public void onClick(View v) { importFiles(); }
-        }));
-        bar.addView(toolBtn("🗑 Del", new View.OnClickListener() {
-            @Override public void onClick(View v) { deleteCurrent(); }
-        }));
-        bar.addView(toolBtn("↩ Undo", new View.OnClickListener() {
-            @Override public void onClick(View v) { undo(); }
-        }));
-        bar.addView(toolBtn("🔍 Find", new View.OnClickListener() {
-            @Override public void onClick(View v) { findDialog(); }
-        }));
-        bar.addView(toolBtn("A+", new View.OnClickListener() {
-            @Override public void onClick(View v) { changeFont(2); }
-        }));
-        bar.addView(toolBtn("A-", new View.OnClickListener() {
-            @Override public void onClick(View v) { changeFont(-2); }
-        }));
-        bar.addView(toolBtn("Wrap", new View.OnClickListener() {
-            @Override public void onClick(View v) { toggleWrap(); }
-        }));
-        bar.addView(toolBtn("Snip", new View.OnClickListener() {
-            @Override public void onClick(View v) { snippetsDialog(); }
-        }));
-        bar.addView(toolBtn("⚡ Convert", new View.OnClickListener() {
-            @Override public void onClick(View v) { convert(); }
-        }));
+        bar.addView(toolBtn("↩ Undo", v -> undo()));
+        bar.addView(toolBtn("🔍 Find", v -> findDialog()));
+        bar.addView(toolBtn("⇥ Tab", v -> insertTab()));
+        bar.addView(toolBtn("📋 Snip", v -> snippetsDialog()));
+        bar.addView(toolBtn("A+", v -> changeFont(2)));
+        bar.addView(toolBtn("A-", v -> changeFont(-2)));
+        bar.addView(toolBtn("📐 Wrap", v -> toggleWrap()));
+        bar.addView(toolBtn("⚡ Convert", v -> convert()));
 
-        root.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+        toolStrip.addView(hs, new LinearLayout.LayoutParams(-1, -2));
+        root.addView(toolStrip, new LinearLayout.LayoutParams(-1, -2));
 
-        // overlay for convert
+        // ================= full-screen explorer overlay =================
+        explorer = new LinearLayout(this);
+        explorer.setOrientation(LinearLayout.VERTICAL);
+        explorer.setBackgroundColor(t.bg);
+        explorer.setClickable(true);
+        explorer.setVisibility(View.GONE);
+
+        LinearLayout exHeader = new LinearLayout(this);
+        exHeader.setOrientation(LinearLayout.VERTICAL);
+        exHeader.setBackground(Ui.gradient(Ui.GREEN_DEEP, Ui.GREEN, 0, this));
+        exHeader.setPadding(Ui.dp(16), Ui.dp(22), Ui.dp(16), Ui.dp(14));
+
+        LinearLayout exRow = new LinearLayout(this);
+        exRow.setGravity(Gravity.CENTER_VERTICAL);
+        TextView close = Ui.text(this, "✕", 16, Color.WHITE, true);
+        close.setGravity(Gravity.CENTER);
+        close.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
+        close.setPadding(Ui.dp(14), Ui.dp(7), Ui.dp(14), Ui.dp(7));
+        close.setOnClickListener(v -> toggleExplorer());
+        exRow.addView(close, new LinearLayout.LayoutParams(-2, -2));
+
+        LinearLayout exCol = new LinearLayout(this);
+        exCol.setOrientation(LinearLayout.VERTICAL);
+        LinearLayout.LayoutParams exClp = new LinearLayout.LayoutParams(0, -2, 1f);
+        exClp.leftMargin = Ui.dp(12);
+        exCol.addView(Ui.text(this, "FILES", 16, Color.WHITE, true));
+        explorerSub = Ui.text(this, p.name, 10.5f, 0xB3FFFFFF, false);
+        exCol.addView(explorerSub);
+        exRow.addView(exCol, exClp);
+        exHeader.addView(exRow, new LinearLayout.LayoutParams(-1, -2));
+
+        LinearLayout exActions = new LinearLayout(this);
+        exActions.setPadding(0, Ui.dp(12), 0, 0);
+        exActions.addView(exBtn("＋ File", v -> newFileDialog()));
+        exActions.addView(exBtn("📁 Folder", v -> newFolderDialog()));
+        exActions.addView(exBtn("📥 Import", v -> importFiles()));
+        exActions.addView(exBtn("🗑 Delete", v -> deleteCurrent()));
+        exHeader.addView(exActions, new LinearLayout.LayoutParams(-1, -2));
+        explorer.addView(exHeader, new LinearLayout.LayoutParams(-1, -2));
+
+        filesList = new ListView(this);
+        filesList.setDivider(null);
+        filesList.setDividerHeight(Ui.dp(8));
+        filesList.setPadding(Ui.dp(14), Ui.dp(10), Ui.dp(14), Ui.dp(20));
+        filesList.setClipToPadding(false);
+        filesList.setAdapter(new FilesAdapter());
+        filesList.setOnItemClickListener((parent, v, pos, id2) -> onFileTap(pos));
+        filesList.setOnItemLongClickListener((parent, v, pos, id2) -> {
+            fileOptions(pos);
+            return true;
+        });
+        explorer.addView(filesList, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        base.addView(explorer, new FrameLayout.LayoutParams(-1, -1));
+
+        // ================= convert overlay =================
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
-        overlay.setBackgroundColor(0xF0FFFFFF);
+        overlay.setBackgroundColor(Prefs.dark(this) ? 0xF0141E31 : 0xF0FFFFFF);
         overlay.setClickable(true);
         overlay.setVisibility(View.GONE);
         ProgressBar pb = new ProgressBar(this);
@@ -264,8 +291,9 @@ public class IdeActivity extends Activity {
 
     private TextView toolBtn(String label, View.OnClickListener l) {
         TextView b = Ui.text(this, label, 12, Color.WHITE, true);
-        b.setBackground(Ui.ripple(this, Ui.fill(Ui.GREEN, 10, this)));
-        b.setPadding(Ui.dp(12), Ui.dp(8), Ui.dp(12), Ui.dp(8));
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Ui.ripple(this, Ui.fill(0x26FFFFFF, 10, this)));
+        b.setPadding(Ui.dp(13), Ui.dp(8), Ui.dp(13), Ui.dp(8));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
         lp.rightMargin = Ui.dp(8);
         b.setLayoutParams(lp);
@@ -274,7 +302,33 @@ public class IdeActivity extends Activity {
         return b;
     }
 
-    // ---------------- files ----------------
+    private TextView exBtn(String label, View.OnClickListener l) {
+        TextView b = Ui.text(this, label, 12, Color.WHITE, true);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Ui.ripple(this, Ui.fill(Ui.GREEN, 12, this)));
+        b.setPadding(Ui.dp(8), Ui.dp(10), Ui.dp(8), Ui.dp(10));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, -2, 1f);
+        lp.rightMargin = Ui.dp(8);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(l);
+        Ui.pressScale(b, 0.94f);
+        return b;
+    }
+
+    private void toggleExplorer() {
+        if (explorer.getVisibility() == View.VISIBLE) {
+            explorer.animate().alpha(0f).translationX(Ui.dp(60)).setDuration(180).start();
+            explorer.postDelayed(() -> explorer.setVisibility(View.GONE), 180);
+        } else {
+            refreshFiles();
+            explorer.setAlpha(0f);
+            explorer.setTranslationX(Ui.dp(60));
+            explorer.setVisibility(View.VISIBLE);
+            explorer.animate().alpha(1f).translationX(0).setDuration(220).start();
+        }
+    }
+
+    // ================= files =================
 
     private void buildEntries(List<Object[]> out, File dir, String prefix) {
         File[] fs = dir.listFiles();
@@ -300,7 +354,12 @@ public class IdeActivity extends Activity {
     private void refreshFiles() {
         entries.clear();
         buildEntries(entries, p.srcDir(this), "");
-        ((BaseAdapter) filesList.getAdapter()).notifyDataSetChanged();
+        int files = 0;
+        for (Object[] e : entries) if (!(Boolean) e[1]) files++;
+        explorerSub.setText(p.name + "  •  " + files + " file" + (files == 1 ? "" : "s"));
+        if (filesList != null && filesList.getAdapter() != null) {
+            ((BaseAdapter) filesList.getAdapter()).notifyDataSetChanged();
+        }
     }
 
     private File fileFor(String rel) {
@@ -311,19 +370,20 @@ public class IdeActivity extends Activity {
         Object[] e = entries.get(pos);
         boolean isDir = (Boolean) e[1];
         String rel = (String) e[0];
-        if (isDir) {
-            Ui.toast(this, "Folder: " + rel);
-            return;
-        }
+        if (isDir) return;
         saveCurrent();
         openFile(rel);
+        toggleExplorer();
     }
 
     private void openFirstFile() {
         for (Object[] e : entries) {
             if (!(Boolean) e[1]) { openFile((String) e[0]); return; }
         }
-        newFileDialog();
+        refreshFiles();
+        for (Object[] e : entries) {
+            if (!(Boolean) e[1]) { openFile((String) e[0]); return; }
+        }
     }
 
     private void openFile(String rel) {
@@ -339,10 +399,11 @@ public class IdeActivity extends Activity {
             undoMap.put(rel, content);
             editor.setText(content);
             editor.setTextSize(Prefs.fontSize(this));
-            filePathLabel.setText("  " + rel);
+            String fileName = rel.substring(rel.lastIndexOf('/') + 1);
+            fileTitle.setText(fileName);
             scheduleHighlight();
             updateMeta();
-        } catch (Exception e) {
+        } catch (Throwable e) {
             Ui.toast(this, "Cannot open: " + rel);
         }
     }
@@ -355,8 +416,10 @@ public class IdeActivity extends Activity {
             FileWriter w = new FileWriter(f);
             w.write(editor.getText().toString());
             w.close();
-        } catch (Exception ignored) { }
+        } catch (Throwable ignored) { }
     }
+
+    // ================= file ops =================
 
     private void newFileDialog() {
         final EditText input = pathInput("e.g. com/mod/MyHook.java");
@@ -373,12 +436,11 @@ public class IdeActivity extends Activity {
                     if (f.exists()) { Ui.toast(this, "File already exists"); return; }
                     try {
                         f.getParentFile().mkdirs();
-                        String cls = rel.substring(rel.lastIndexOf('/') + 1)
-                                .replace(".java", "");
+                        String cls = rel.substring(rel.lastIndexOf('/') + 1).replace(".java", "");
                         FileWriter w2 = new FileWriter(f);
                         w2.write("public class " + cls + " {\n    \n}\n");
                         w2.close();
-                    } catch (Exception ignored) { }
+                    } catch (Throwable ignored) { }
                     refreshFiles();
                     saveCurrent();
                     openFile(rel);
@@ -397,7 +459,7 @@ public class IdeActivity extends Activity {
                     if (rel.length() == 0 || rel.contains("..")) return;
                     fileFor(rel).mkdirs();
                     refreshFiles();
-                    Ui.toast(this, "Folder created");
+                    Ui.toast(this, "Folder created ✔");
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
@@ -417,8 +479,9 @@ public class IdeActivity extends Activity {
         if (requestCode != REQ_IMPORT || resultCode != RESULT_OK || data == null) return;
         List<Uri> uris = new ArrayList<>();
         if (data.getClipData() != null) {
-            for (int i = 0; i < data.getClipData().getItemCount(); i++)
+            for (int i = 0; i < data.getClipData().getItemCount(); i++) {
                 uris.add(data.getClipData().getItemAt(i).getUri());
+            }
         } else if (data.getData() != null) uris.add(data.getData());
         int count = 0;
         for (Uri u : uris) {
@@ -432,16 +495,17 @@ public class IdeActivity extends Activity {
                 byte[] buf = new byte[8192];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                out.close(); in.close();
+                out.close();
+                in.close();
                 if (name.toLowerCase().endsWith(".zip")) {
                     Ui.unzipJava(dst, p.srcDir(this));
                     dst.delete();
                 }
                 count++;
-            } catch (Exception ignored) { }
+            } catch (Throwable ignored) { }
         }
         refreshFiles();
-        Ui.toast(this, count + " item(s) imported");
+        Ui.toast(this, count + " item(s) imported ✔");
     }
 
     private String uriName(Uri u) {
@@ -456,7 +520,7 @@ public class IdeActivity extends Activity {
                     }
                 } finally { c.close(); }
             }
-        } catch (Exception ignored) { }
+        } catch (Throwable ignored) { }
         String seg = u.getLastPathSegment();
         if (seg == null) return null;
         int i = seg.lastIndexOf('/');
@@ -476,7 +540,7 @@ public class IdeActivity extends Activity {
                     if (isDir) {
                         if (w == 0) confirmDeletePath(rel, true);
                     } else {
-                        if (w == 0) { saveCurrent(); openFile(rel); }
+                        if (w == 0) { saveCurrent(); openFile(rel); toggleExplorer(); }
                         else if (w == 1) renameDialog(rel);
                         else if (w == 2) confirmDeletePath(rel, false);
                     }
@@ -496,7 +560,7 @@ public class IdeActivity extends Activity {
                             || currentRel.startsWith(prefix))) {
                         currentRel = null;
                         editor.setText("");
-                        filePathLabel.setText("no file open");
+                        fileTitle.setText("Java2Dex IDE");
                     }
                     refreshFiles();
                     Ui.toast(this, "Deleted");
@@ -519,9 +583,12 @@ public class IdeActivity extends Activity {
                     File to = fileFor(nr);
                     to.getParentFile().mkdirs();
                     if (from.renameTo(to)) {
-                        if (rel.equals(currentRel)) currentRel = nr;
+                        if (rel.equals(currentRel)) {
+                            currentRel = nr;
+                            fileTitle.setText(nr.substring(nr.lastIndexOf('/') + 1));
+                        }
                         refreshFiles();
-                        Ui.toast(this, "Renamed");
+                        Ui.toast(this, "Renamed ✔");
                     } else Ui.toast(this, "Rename failed");
                 })
                 .setNegativeButton("Cancel", null)
@@ -533,7 +600,13 @@ public class IdeActivity extends Activity {
         confirmDeletePath(currentRel, false);
     }
 
-    // ---------------- editor tools ----------------
+    // ================= editor tools =================
+
+    private void insertTab() {
+        int at = editor.getSelectionStart();
+        if (at < 0) at = 0;
+        editor.getText().insert(at, "    ");
+    }
 
     private void undo() {
         if (currentRel == null) { Ui.toast(this, "No file open"); return; }
@@ -543,7 +616,7 @@ public class IdeActivity extends Activity {
         undoMap.put(currentRel, now);
         editor.setText(snap);
         editor.setSelection(snap.length());
-        Ui.toast(this, "Undo done");
+        Ui.toast(this, "Undo done ↩");
     }
 
     private void findDialog() {
@@ -560,7 +633,7 @@ public class IdeActivity extends Activity {
         if (q == null || q.length() == 0) return;
         String text = editor.getText().toString();
         int start = editor.getSelectionEnd();
-        int idx = text.indexOf(q, start);
+        int idx = text.indexOf(q, Math.max(0, start));
         if (idx < 0) idx = text.indexOf(q, 0);
         if (idx < 0) { Ui.toast(this, "Not found"); return; }
         editor.requestFocus();
@@ -588,6 +661,7 @@ public class IdeActivity extends Activity {
                 {"public class", "public class NAME {\n    \n}\n"},
                 {"main method", "public static void main(String[] args) {\n    \n}\n"},
                 {"Log.d", "android.util.Log.d(\"Java2Dex\", \"msg\");\n"},
+                {"Toast", "android.widget.Toast.makeText(ctx, \"msg\", 0).show();\n"},
                 {"for loop", "for (int i = 0; i < 10; i++) {\n    \n}\n"},
                 {"if-else", "if (cond) {\n    \n} else {\n    \n}\n"},
                 {"try-catch", "try {\n    \n} catch (Exception e) {\n    \n}\n"},
@@ -604,7 +678,7 @@ public class IdeActivity extends Activity {
                 }).show();
     }
 
-    // ---------------- convert ----------------
+    // ================= convert =================
 
     private void convert() {
         saveCurrent();
@@ -615,11 +689,12 @@ public class IdeActivity extends Activity {
                 overlay.setVisibility(View.GONE);
                 try {
                     FileWriter w = new FileWriter(p.logFile(IdeActivity.this));
-                    w.write(log); w.close();
-                } catch (Exception ignored) { }
+                    w.write(log);
+                    w.close();
+                } catch (Throwable ignored) { }
                 if (ok) {
                     new AlertDialog.Builder(IdeActivity.this)
-                            .setTitle("Converted")
+                            .setTitle("✔ Converted")
                             .setMessage("DEX saved to:\n"
                                     + p.publicDexFile(IdeActivity.this).getAbsolutePath())
                             .setPositiveButton("Open Smali", (d, w) -> {
@@ -637,7 +712,7 @@ public class IdeActivity extends Activity {
                     tv.setPadding(pd, pd, pd, pd);
                     sc.addView(tv, new FrameLayout.LayoutParams(-1, -2));
                     new AlertDialog.Builder(IdeActivity.this)
-                            .setTitle("Build Failed")
+                            .setTitle("✖ Build Failed")
                             .setView(sc)
                             .setPositiveButton("Copy",
                                     (d, w) -> Ui.copy(IdeActivity.this, "log", log))
@@ -648,7 +723,7 @@ public class IdeActivity extends Activity {
         });
     }
 
-    // ---------------- highlighting ----------------
+    // ================= highlighting =================
 
     private void scheduleHighlight() {
         if (hlRun != null) hl.removeCallbacks(hlRun);
@@ -734,11 +809,12 @@ public class IdeActivity extends Activity {
             if (text.charAt(i) == '\n') { lines++; lastNl = i; }
         }
         int col = sel - lastNl;
-        metaLabel.setText("Ln " + lines + ", Col " + col + "  •  font "
-                + Prefs.fontSize(this) + (wrapOn ? "  •  wrap" : ""));
+        metaLabel.setText("Ln " + lines + ", Col " + col + "  •  font " + Prefs.fontSize(this)
+                + (wrapOn ? " • wrap" : "")
+                + (currentRel != null ? "  •  " + currentRel : ""));
     }
 
-    // ---------------- helpers ----------------
+    // ================= helpers =================
 
     private FrameLayout wrapInput(EditText e) {
         FrameLayout f = new FrameLayout(this);
@@ -764,7 +840,7 @@ public class IdeActivity extends Activity {
         saveCurrent();
     }
 
-    // ---------------- adapter ----------------
+    // ================= adapter =================
 
     private class FilesAdapter extends BaseAdapter {
         @Override public int getCount() { return entries.size(); }
@@ -773,22 +849,25 @@ public class IdeActivity extends Activity {
 
         @Override
         public View getView(int position, View convertView, android.view.ViewGroup parent) {
-            LinearLayout row = new LinearLayout(IdeActivity.this);
-            row.setGravity(Gravity.CENTER_VERTICAL);
-            int pad = Ui.dp(8);
-            row.setPadding(pad, pad, pad, pad);
+            LinearLayout card = new LinearLayout(IdeActivity.this);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setBackground(Ui.ripple(IdeActivity.this,
+                    Ui.outline(t.card, t.cardStroke, 12, 1, IdeActivity.this)));
+            int pad = Ui.dp(12);
+            card.setPadding(pad, pad, pad, pad);
             Object[] e = entries.get(position);
             boolean isDir = (Boolean) e[1];
             String rel = (String) e[0];
             TextView tv = Ui.text(IdeActivity.this,
-                    (isDir ? "[D] " : "[F] ") + rel, 11.5f,
+                    (isDir ? "📁 " : "📄 ") + rel, 12,
                     isDir ? t.accentDark : t.text, isDir);
             tv.setSingleLine(true);
-            row.addView(tv, new LinearLayout.LayoutParams(-1, -2));
+            card.addView(tv, new LinearLayout.LayoutParams(-1, -2));
             if (rel.equals(currentRel)) {
-                row.setBackgroundColor(t.accentSoft);
+                card.setBackground(Ui.ripple(IdeActivity.this,
+                        Ui.outline(t.accentSoft, t.accent, 12, 1.4f, IdeActivity.this)));
             }
-            return row;
+            return card;
         }
     }
 }
