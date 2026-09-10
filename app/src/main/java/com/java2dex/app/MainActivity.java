@@ -25,7 +25,6 @@ import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
 import android.widget.TextView;
-import android.webkit.WebView;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -72,8 +71,9 @@ public class MainActivity extends Activity {
         if (appliedDark != Prefs.dark(this)) { recreate(); return; }
         boolean ok = storageOk();
         if (ok) Project.java2dexRoot(this);
-        if (permOverlay != null)
+        if (permOverlay != null) {
             permOverlay.setVisibility((!ok && askedStorage) ? View.VISIBLE : View.GONE);
+        }
         refresh();
     }
 
@@ -135,7 +135,6 @@ public class MainActivity extends Activity {
         logo.setImageResource(R.drawable.logo);
         logo.setBackground(Ui.fill(0x33FFFFFF, 18, this));
         logo.setPadding(Ui.dp(8), Ui.dp(8), Ui.dp(8), Ui.dp(8));
-        logo.setClipToOutline(true);
         titleRow.addView(logo, new LinearLayout.LayoutParams(Ui.dp(46), Ui.dp(46)));
 
         LinearLayout titleCol = new LinearLayout(this);
@@ -148,15 +147,12 @@ public class MainActivity extends Activity {
 
         titleRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
 
-        titleRow.addView(iconBtn("👨‍💻", v -> showDeveloper()));
-        titleRow.addView(iconBtn("ⓘ", v -> startActivity(
-                new Intent(this, InfoActivity.class))));
-        titleRow.addView(iconBtn("⚙", v -> startActivity(
-                new Intent(this, SettingsActivity.class))));
+        titleRow.addView(iconBtn("👨‍💻", v -> Dialogs.html(this, "👨‍💻 Developer", "developer.html")));
+        titleRow.addView(iconBtn("ⓘ", v -> startActivity(new Intent(this, InfoActivity.class))));
+        titleRow.addView(iconBtn("⚙", v -> startActivity(new Intent(this, SettingsActivity.class))));
 
         header.addView(titleRow, new LinearLayout.LayoutParams(-1, -2));
 
-        // stats cards
         LinearLayout stats = new LinearLayout(this);
         LinearLayout.LayoutParams stl = new LinearLayout.LayoutParams(-1, -2);
         stl.topMargin = Ui.dp(18);
@@ -164,7 +160,6 @@ public class MainActivity extends Activity {
         statOk = statCard(stats, "SUCCESS");
         statErr = statCard(stats, "FAILED");
         header.addView(stats, stl);
-
         page.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
         // ---------- quick actions ----------
@@ -173,29 +168,28 @@ public class MainActivity extends Activity {
         quickWrap.setPadding(Ui.dp(16), Ui.dp(14), Ui.dp(16), 0);
         page.addView(quickWrap, new LinearLayout.LayoutParams(-1, -2));
 
-        TextView ql = Ui.text(this, "QUICK ACTIONS", 10.5f, t.textSub, true);
-        quickWrap.addView(ql);
+        quickWrap.addView(Ui.text(this, "QUICK ACTIONS", 10.5f, t.textSub, true));
 
-                LinearLayout row1 = new LinearLayout(this);
+        LinearLayout row1 = new LinearLayout(this);
         LinearLayout.LayoutParams r1p = new LinearLayout.LayoutParams(-1, -2);
         r1p.topMargin = Ui.dp(8);
-        row1.addView(quickCard("➕", "New Project", "import or write code", v ->
-                startActivity(new Intent(this, NewProjectActivity.class))), weight());
+        row1.addView(quickCard("➕", "New Project", "import or write code",
+                v -> startActivity(new Intent(this, NewProjectActivity.class))), weight());
         LinearLayout.LayoutParams r1b = weight();
         r1b.leftMargin = Ui.dp(10);
-        row1.addView(quickCard("🧠", "Code IDE", "write & edit java files", v ->
-                openIdeQuick()), r1b);
+        row1.addView(quickCard("🧠", "Code IDE", "write & edit java files",
+                v -> openIdeQuick()), r1b);
         quickWrap.addView(row1, r1p);
 
         LinearLayout row2 = new LinearLayout(this);
         LinearLayout.LayoutParams r2p = new LinearLayout.LayoutParams(-1, -2);
         r2p.topMargin = Ui.dp(10);
-        row2.addView(quickCard("🧪", "Sample", "load demo & convert", v ->
-                createSampleAndOpen()), weight());
+        row2.addView(quickCard("🧪", "Sample", "load demo & convert",
+                v -> createSampleAndOpen()), weight());
         LinearLayout.LayoutParams r2b = weight();
         r2b.leftMargin = Ui.dp(10);
-        row2.addView(quickCard("📂", "Output", "see save location", v ->
-                showOutputInfo()), r2b);
+        row2.addView(quickCard("📂", "Output", "see save location",
+                v -> showOutputInfo()), r2b);
         quickWrap.addView(row2, r2p);
 
         // ---------- search ----------
@@ -214,7 +208,9 @@ public class MainActivity extends Activity {
             }
         });
 
-        // ---------- list ----------
+        // ---------- list container (list + empty state live HERE) ----------
+        FrameLayout listContainer = new FrameLayout(this);
+
         list = new ListView(this);
         list.setDivider(null);
         list.setDividerHeight(0);
@@ -225,33 +221,41 @@ public class MainActivity extends Activity {
             confirmDelete(shown.get(pos));
             return true;
         });
-        page.addView(list, new LinearLayout.LayoutParams(-1, 0, 1f));
+        listContainer.addView(list, new FrameLayout.LayoutParams(-1, -1));
+
         adapter = new Adapter();
         list.setAdapter(adapter);
 
-        // ---------- empty state ----------
+        // empty state INSIDE the list area — never overlaps quick actions (Bug 1 fix)
         emptyBox = new LinearLayout(this);
         emptyBox.setOrientation(LinearLayout.VERTICAL);
         emptyBox.setGravity(Gravity.CENTER);
-        TextView e1 = Ui.text(this, "📦", 44, t.text, false);
-        e1.setGravity(Gravity.CENTER);
-        emptyBox.addView(e1);
+
+        FrameLayout eIcon = new FrameLayout(this);
+        eIcon.setBackground(Ui.gradient(Ui.GREEN_LIGHT, Ui.GREEN_LIGHT, 30, this));
+        TextView eEmoji = Ui.text(this, "📦", 30, Ui.GREEN_DARK, false);
+        eEmoji.setGravity(Gravity.CENTER);
+        eIcon.addView(eEmoji, new FrameLayout.LayoutParams(-1, -1));
+        emptyBox.addView(eIcon, new LinearLayout.LayoutParams(Ui.dp(84), Ui.dp(84)));
+
         TextView e2 = Ui.text(this, "No projects yet", 16, t.text, true);
         e2.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams e2p = new LinearLayout.LayoutParams(-2, -2);
-        e2p.topMargin = Ui.dp(10);
+        e2p.topMargin = Ui.dp(14);
         emptyBox.addView(e2, e2p);
-        TextView e3 = Ui.text(this, "Create a project or open the IDE\nto start converting", 12.5f, t.textSub, false);
+        TextView e3 = Ui.text(this,
+                "Create a project or open the IDE\nto start converting", 12.5f, t.textSub, false);
         e3.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams e3p = new LinearLayout.LayoutParams(-2, -2);
         e3p.topMargin = Ui.dp(4);
         emptyBox.addView(e3, e3p);
         emptyBox.setVisibility(View.GONE);
         FrameLayout.LayoutParams emp = new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER);
-        emp.bottomMargin = Ui.dp(80);
-        root.addView(emptyBox, emp);
+        listContainer.addView(emptyBox, emp);
 
-        // ---------- FAB (square, light radius, shadow) ----------
+        page.addView(listContainer, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        // ---------- FAB ----------
         fab = new FrameLayout(this);
         fab.setBackground(Ui.ripple(this, Ui.gradient(Ui.GREEN, Ui.GREEN_DARK, 16, this)));
         fab.setElevation(Ui.dp(9));
@@ -315,7 +319,7 @@ public class MainActivity extends Activity {
         sc.setGravity(Gravity.CENTER);
 
         splashLogoBox = new FrameLayout(this);
-        splashLogoBox.setBackground(Ui.ripple(this, Ui.gradient(Ui.GREEN, Ui.GREEN_DARK, 26, this)));
+        splashLogoBox.setBackground(Ui.gradient(Ui.GREEN, Ui.GREEN_DARK, 26, this));
         splashLogoBox.setElevation(Ui.dp(10));
         ImageView slogo = new ImageView(this);
         slogo.setImageResource(R.drawable.logo);
@@ -342,6 +346,10 @@ public class MainActivity extends Activity {
         root.addView(splash, new FrameLayout.LayoutParams(-1, -1));
     }
 
+    private LinearLayout.LayoutParams weight() {
+        return new LinearLayout.LayoutParams(0, -2, 1f);
+    }
+
     private TextView iconBtn(String glyph, View.OnClickListener l) {
         TextView b = Ui.text(this, glyph, 15, Color.WHITE, false);
         b.setGravity(Gravity.CENTER);
@@ -353,10 +361,6 @@ public class MainActivity extends Activity {
         b.setOnClickListener(l);
         Ui.pressScale(b, 0.9f);
         return b;
-    }
-        
-        private LinearLayout.LayoutParams weight() {
-        return new LinearLayout.LayoutParams(0, -2, 1f);
     }
 
     private TextView statCard(LinearLayout parent, String label) {
@@ -403,8 +407,7 @@ public class MainActivity extends Activity {
 
         card.setOnClickListener(l);
         Ui.pressScale(card, 0.96f);
-
-                return card;
+        return card;
     }
 
     private void openIdeQuick() {
@@ -425,18 +428,18 @@ public class MainActivity extends Activity {
     private void createSampleAndOpen() {
         Project p = new Project();
         p.id = String.valueOf(System.currentTimeMillis());
-        p.name = "SampleMod_" + (p.id.substring(p.id.length() - 4));
+        p.name = "SampleMod_" + p.id.substring(p.id.length() - 4);
         p.createdAt = System.currentTimeMillis();
         p.srcDir(this).mkdirs();
         writeFile(new File(p.srcDir(this), "HelloMod.java"),
                 "public class HelloMod {\n"
-                + "    public static String TAG = \"Java2Dex\";\n\n"
-                + "    public static String hello(String who) {\n"
-                + "        return \"Hello \" + who + \" from \" + TAG + \"!\";\n"
-                + "    }\n\n"
-                + "    public static int add(int a, int b) {\n"
-                + "        return a + b;\n"
-                + "    }\n}\n");
+                        + "    public static String TAG = \"Java2Dex\";\n\n"
+                        + "    public static String hello(String who) {\n"
+                        + "        return \"Hello \" + who + \" from \" + TAG + \"!\";\n"
+                        + "    }\n\n"
+                        + "    public static int add(int a, int b) {\n"
+                        + "        return a + b;\n"
+                        + "    }\n}\n");
         Project.upsert(this, p);
         openIde(p);
         Ui.toast(this, "Sample project created ✔");
@@ -464,33 +467,6 @@ public class MainActivity extends Activity {
                 .setMessage(Project.java2dexRoot(this).getAbsolutePath()
                         + "\n\nEach project saves as:\n<project-name>/classes.dex")
                 .setPositiveButton("OK", null)
-                .show();
-    }
-
-    private void showDeveloper() {
-        FrameLayout wrap = new FrameLayout(this);
-        boolean hasFile = false;
-        try {
-            for (String s : getAssets().list("")) if (s.equals("developer.html")) hasFile = true;
-        } catch (Exception ignored) { }
-        if (hasFile) {
-            WebView wv = new WebView(this);
-            wv.getSettings().setJavaScriptEnabled(true);
-            wv.setBackgroundColor(Color.TRANSPARENT);
-            wv.loadUrl("file:///android_asset/developer.html");
-            wrap.addView(wv, new FrameLayout.LayoutParams(
-                    -1, Ui.dp(380)));
-        } else {
-            TextView tv = Ui.text(this,
-                    "developer.html not found in app assets.", 14, t.text, false);
-            int p = Ui.dp(20);
-            tv.setPadding(p, p, p, p);
-            wrap.addView(tv);
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("👨‍💻  Developer")
-                .setView(wrap)
-                .setPositiveButton("Close", null)
                 .show();
     }
 
@@ -522,7 +498,9 @@ public class MainActivity extends Activity {
                 byte[] buf = new byte[16384];
                 int n;
                 while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                out.flush(); out.close(); in.close();
+                out.flush();
+                out.close();
+                in.close();
             } catch (Exception ignored) { }
         }, "jar-extract").start();
     }
@@ -554,8 +532,9 @@ public class MainActivity extends Activity {
     private void applyFilter() {
         shown.clear();
         String q = query == null ? "" : query.trim().toLowerCase(Locale.US);
-        for (Project p : projects)
+        for (Project p : projects) {
             if (q.isEmpty() || p.name.toLowerCase(Locale.US).contains(q)) shown.add(p);
+        }
         if (adapter != null) adapter.notifyDataSetChanged();
         if (emptyBox != null) emptyBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
     }
@@ -579,11 +558,13 @@ public class MainActivity extends Activity {
                 .show();
     }
 
-    // ---------------- list adapter ----------------
+    // ---------------- list adapter (redesigned — Bug 2 fix) ----------------
 
     private class Adapter extends BaseAdapter {
 
-        private class Holder { TextView name, chip, sub; View dot; }
+        private class Holder {
+            TextView icon, name, chip, sub;
+        }
 
         @Override public int getCount() { return shown.size(); }
         @Override public Object getItem(int position) { return shown.get(position); }
@@ -602,24 +583,28 @@ public class MainActivity extends Activity {
                 h = (Holder) v.getTag();
             }
             Project p = shown.get(position);
-            h.name.setText(p.name);
-            int dotColor = t.textSub;
-            String chipTxt = "PENDING";
-            int chipFg = t.textSub, chipBg = t.chipBg;
+            h.icon.setText(p.name.length() > 0
+                    ? p.name.substring(0, 1).toUpperCase(Locale.US) : "?");
+
+            String chipTxt;
+            int chipFg, chipBg;
             String sub;
             if (p.status == Project.ST_OK) {
-                dotColor = 0xFF22C55E;
-                chipTxt = "✔ SUCCESS"; chipFg = t.accentDark; chipBg = t.accentSoft;
+                chipTxt = "✔ SUCCESS";
+                chipFg = t.accentDark;
+                chipBg = t.accentSoft;
                 sub = p.dateText() + "  •  " + Ui.size(p.dexSize);
             } else if (p.status == Project.ST_ERROR) {
-                dotColor = t.danger;
-                chipTxt = "✖ FAILED"; chipFg = t.danger; chipBg = t.dangerSoft;
+                chipTxt = "✖ FAILED";
+                chipFg = t.danger;
+                chipBg = t.dangerSoft;
                 sub = p.dateText() + "  •  build failed";
             } else {
+                chipTxt = "PENDING";
+                chipFg = t.textSub;
+                chipBg = t.chipBg;
                 sub = "created " + p.createdText() + "  •  not built";
             }
-            h.dot.getBackground().setColorFilter(dotColor, android.graphics.PorterDuff.Mode.SRC_ATOP);
-            h.dot.invalidate();
             h.chip.setText(chipTxt);
             h.chip.setTextColor(chipFg);
             h.chip.setBackground(Ui.fill(chipBg, 20, MainActivity.this));
@@ -628,52 +613,55 @@ public class MainActivity extends Activity {
         }
 
         private View makeItemView(Holder h) {
-            FrameLayout wrap = new FrameLayout(MainActivity.this);
+            // outer wrapper provides spacing between cards
+            LinearLayout outer = new LinearLayout(MainActivity.this);
+            outer.setOrientation(LinearLayout.VERTICAL);
+            outer.setPadding(0, 0, 0, Ui.dp(10));
 
             LinearLayout card = new LinearLayout(MainActivity.this);
-            card.setOrientation(LinearLayout.VERTICAL);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
             card.setBackground(Ui.ripple(MainActivity.this,
-                    Ui.outline(t.card, t.cardStroke, 16, 1, MainActivity.this)));
-            card.setElevation(Ui.dp(2));
+                    Ui.outline(t.card, t.cardStroke, 18, 1, MainActivity.this)));
+            card.setElevation(Ui.dp(3));
             int pad = Ui.dp(14);
             card.setPadding(pad, pad, pad, pad);
 
-            LinearLayout row = new LinearLayout(MainActivity.this);
-            row.setGravity(Gravity.CENTER_VERTICAL);
+            // letter icon
+            FrameLayout iconBox = new FrameLayout(MainActivity.this);
+            iconBox.setBackground(Ui.gradient(Ui.GREEN, Ui.GREEN_DARK, 14, MainActivity.this));
+            h.icon = Ui.text(MainActivity.this, "", 17, Color.WHITE, true);
+            h.icon.setGravity(Gravity.CENTER);
+            iconBox.addView(h.icon, new FrameLayout.LayoutParams(-1, -1));
+            card.addView(iconBox, new LinearLayout.LayoutParams(Ui.dp(46), Ui.dp(46)));
 
-            h.dot = new View(MainActivity.this);
-            h.dot.setBackground(Ui.fill(t.textSub, 6, MainActivity.this));
-            LinearLayout.LayoutParams dlp = new LinearLayout.LayoutParams(Ui.dp(10), Ui.dp(10));
-            dlp.rightMargin = Ui.dp(10);
-            row.addView(h.dot, dlp);
-
-            h.name = Ui.text(MainActivity.this, "", 15f, t.text, true);
+            // texts
+            LinearLayout col = new LinearLayout(MainActivity.this);
+            col.setOrientation(LinearLayout.VERTICAL);
+            h.name = Ui.text(MainActivity.this, "", 15.5f, t.text, true);
             h.name.setSingleLine(true);
-            row.addView(h.name, new LinearLayout.LayoutParams(0, -2, 1f));
-
-            h.chip = Ui.text(MainActivity.this, "", 10f, t.accentDark, true);
-            h.chip.setBackground(Ui.fill(t.accentSoft, 20, MainActivity.this));
-            h.chip.setPadding(Ui.dp(10), Ui.dp(3), Ui.dp(10), Ui.dp(3));
-            row.addView(h.chip, new LinearLayout.LayoutParams(-2, -2));
-
-            TextView chev = Ui.text(MainActivity.this, " ›", 18, t.textSub, true);
-            row.addView(chev, new LinearLayout.LayoutParams(-2, -2));
-
-            card.addView(row, new LinearLayout.LayoutParams(-1, -2));
-
+            col.addView(h.name);
             h.sub = Ui.text(MainActivity.this, "", 11.5f, t.textSub, false);
             h.sub.setSingleLine(true);
-            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-1, -2);
-            sp.topMargin = Ui.dp(5);
-            sp.leftMargin = Ui.dp(20);
-            card.addView(h.sub, sp);
+            LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(-2, -2);
+            sp.topMargin = Ui.dp(3);
+            col.addView(h.sub, sp);
+            LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(0, -2, 1f);
+            clp.leftMargin = Ui.dp(12);
+            card.addView(col, clp);
 
-            wrap.addView(card, new FrameLayout.LayoutParams(-1, -2));
-            LinearLayout outer = new LinearLayout(MainActivity.this);
-            outer.addView(wrap, new LinearLayout.LayoutParams(-1, -2));
-            LinearLayout.LayoutParams op = new LinearLayout.LayoutParams(-1, -2);
-            op.bottomMargin = Ui.dp(10);
-            outer.setLayoutParams(op);
+            // chip + chevron
+            LinearLayout right = new LinearLayout(MainActivity.this);
+            right.setGravity(Gravity.CENTER_VERTICAL);
+            h.chip = Ui.text(MainActivity.this, "", 10f, t.accentDark, true);
+            h.chip.setBackground(Ui.fill(t.accentSoft, 20, MainActivity.this));
+            h.chip.setPadding(Ui.dp(10), Ui.dp(4), Ui.dp(10), Ui.dp(4));
+            right.addView(h.chip, new LinearLayout.LayoutParams(-2, -2));
+            TextView chev = Ui.text(MainActivity.this, " ›", 17, t.textSub, true);
+            right.addView(chev, new LinearLayout.LayoutParams(-2, -2));
+            card.addView(right, new LinearLayout.LayoutParams(-2, -2));
+
+            outer.addView(card, new LinearLayout.LayoutParams(-1, -2));
             return outer;
         }
     }
