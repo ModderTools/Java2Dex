@@ -42,8 +42,5 @@ tasks.withType(JavaCompile).configureEach {
 dependencies {
     implementation 'org.eclipse.jdt.core.compiler:ecj:4.6.1'
     implementation 'com.android.tools:r8:2.1.75'
-    // dexlib2 for smali viewer — guava excluded (r8 already bundles it, avoids duplicate class error)
-    implementation('org.smali:dexlib2:2.5.2') {
-        exclude group: 'com.google.guava'
-    }
+}
 }
