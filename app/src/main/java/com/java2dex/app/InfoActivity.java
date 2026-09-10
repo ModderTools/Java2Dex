@@ -1,14 +1,11 @@
 package com.java2dex.app;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.Intent;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
-import android.webkit.WebView;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
 import android.widget.LinearLayout;
@@ -18,7 +15,6 @@ import android.widget.TextView;
 public class InfoActivity extends Activity {
 
     private Theme t;
-    private long animDelay = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -45,8 +41,7 @@ public class InfoActivity extends Activity {
         c.setElevation(Ui.dp(2));
         int pd = Ui.dp(16);
         c.setPadding(pd, pd, pd, pd);
-        Ui.riseIn(c, animDelay);
-        animDelay += 90;
+        Ui.riseIn(c, 100);
         return c;
     }
 
@@ -78,35 +73,31 @@ public class InfoActivity extends Activity {
         hero.setPadding(Ui.dp(18), Ui.dp(34), Ui.dp(18), Ui.dp(26));
 
         FrameLayout logoBox = new FrameLayout(this);
-        logoBox.setBackground(Ui.ripple(this, Ui.fill(0x30FFFFFF, 24, this)));
+        logoBox.setBackground(Ui.fill(0x30FFFFFF, 24, this));
         logoBox.setElevation(Ui.dp(8));
         ImageView logo = new ImageView(this);
         logo.setImageResource(R.drawable.logo);
-        int lp = Ui.dp(14);
-        logo.setPadding(lp, lp, lp, lp);
+        int lpad = Ui.dp(14);
+        logo.setPadding(lpad, lpad, lpad, lpad);
         logoBox.addView(logo, new FrameLayout.LayoutParams(-1, -1));
         hero.addView(logoBox, new LinearLayout.LayoutParams(Ui.dp(96), Ui.dp(96)));
         Ui.popIn(logoBox, 100);
 
         TextView name = Ui.text(this, "Java2Dex", 24, Color.WHITE, true);
         name.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams np = new LinearLayout.LayoutParams(-2, -2);
-        np.topMargin = Ui.dp(14);
-        hero.addView(name, np);
+        hero.addView(name);
         Ui.riseIn(name, 250);
 
-        TextView ver = Ui.text(this, "Version 2.0  •  \"Code IDE\"", 12.5f, 0xCCFFFFFF, false);
+        TextView ver = Ui.text(this, "Version 2.0 • Code IDE", 12.5f, 0xCCFFFFFF, false);
         ver.setGravity(Gravity.CENTER);
         hero.addView(ver);
         Ui.riseIn(ver, 320);
 
         TextView tag = Ui.text(this,
-                "Compile Java → DEX on your phone.\nBuilt for the modding community ❤",
+                "Compile Java to DEX on your phone.\nBuilt for the modding community",
                 12, 0xB3FFFFFF, false);
         tag.setGravity(Gravity.CENTER);
-        LinearLayout.LayoutParams tp = new LinearLayout.LayoutParams(-2, -2);
-        tp.topMargin = Ui.dp(6);
-        hero.addView(tag, tp);
+        hero.addView(tag);
         Ui.riseIn(tag, 380);
 
         col.addView(hero, new LinearLayout.LayoutParams(-1, -2));
@@ -118,80 +109,76 @@ public class InfoActivity extends Activity {
 
         // stats
         LinearLayout stats = card();
-        LinearLayout row = new LinearLayout(this);
-        row.addView(stat("25+", "Features"), w());
-        row.addView(stat("100%", "Offline"), w());
-        row.addView(stat("3", "Build Stages"), w());
-        stats.addView(row, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout statRow = new LinearLayout(this);
+        statRow.setOrientation(LinearLayout.HORIZONTAL);
+        statRow.addView(stat("25+", "Features"), w());
+        statRow.addView(stat("100%", "Offline"), w());
+        statRow.addView(stat("3", "Build Stages"), w());
+        stats.addView(statRow, new LinearLayout.LayoutParams(-1, -2));
         body.addView(stats, margin());
 
-        // tech stack
+        // tech
         LinearLayout tech = card();
-        tech.addView(Ui.text(this, "🛠  TECH STACK", 12, t.textSub, true));
-        LinearLayout chips = new LinearLayout(this);
-        chips.setOrientation(LinearLayout.VERTICAL);
-        LinearLayout r1 = new LinearLayout(this);
-        r1.addView(chip("Eclipse ECJ 4.6.1"));
-        r1.addView(chip("Google D8 (R8 2.1.75)"));
-        r1.addView(chip("dexlib2 2.5.2"));
-        chips.addView(r1);
-        LinearLayout r2 = new LinearLayout(this);
-        r2.addView(chip("GitHub Actions CI"));
-        r2.addView(chip("100% Java UI"));
-        chips.addView(r2);
-        LinearLayout.LayoutParams cblp = new LinearLayout.LayoutParams(-1, -2);
-        cblp.topMargin = Ui.dp(4);
-        tech.addView(chips, cblp);
+        tech.addView(Ui.text(this, "TECH STACK", 12, t.textSub, true));
+        LinearLayout chipRow1 = new LinearLayout(this);
+        chipRow1.setOrientation(LinearLayout.HORIZONTAL);
+        chipRow1.addView(chip("ECJ 4.6.1"));
+        chipRow1.addView(chip("Google D8"));
+        chipRow1.addView(chip("Custom DEX Parser"));
+        tech.addView(chipRow1);
+        LinearLayout chipRow2 = new LinearLayout(this);
+        chipRow2.setOrientation(LinearLayout.HORIZONTAL);
+        chipRow2.addView(chip("GitHub Actions"));
+        chipRow2.addView(chip("100% Java UI"));
+        tech.addView(chipRow2);
         body.addView(tech, margin());
 
         // features
         LinearLayout feat = card();
-        feat.addView(Ui.text(this, "✨  FEATURE HIGHLIGHTS", 12, t.textSub, true));
-        feature(feat, "⚡ One-tap Java → .class → .dex pipeline");
-        feature(feat, "🧠 Built-in Code IDE (files, folders, import)");
-        feature(feat, "🎨 Syntax highlighting, find, undo, snippets");
-        feature(feat, "🧬 DEX Explorer — browse & read smali");
-        feature(feat, "💾 Save all smali files with one tap");
-        feature(feat, "📂 Auto-save to /storage/emulated/0/Java2Dex/");
-        feature(feat, "🌙 Dark & light themes");
-        feature(feat, "📁 Custom output folder support");
-        feature(feat, "📊 Project dashboard with animated stats");
-        feature(feat, "📄 Full build logs with copy-error");
-        feature(feat, "↗ Share real .dex files to any app");
-        feature(feat, "♻ Reset output folder / wipe projects");
+        feat.addView(Ui.text(this, "FEATURE HIGHLIGHTS", 12, t.textSub, true));
+        addFeature(feat, "One-tap Java to DEX pipeline");
+        addFeature(feat, "AIDE-style Code IDE with file explorer");
+        addFeature(feat, "Syntax highlighting and snippets");
+        addFeature(feat, "DEX Explorer with real smali output");
+        addFeature(feat, "Save all smali files");
+        addFeature(feat, "Auto-save to Java2Dex folder");
+        addFeature(feat, "Dark and light themes");
+        addFeature(feat, "Custom output folder");
+        addFeature(feat, "Animated project dashboard");
+        addFeature(feat, "Full build logs with copy");
+        addFeature(feat, "Share real dex files");
+        addFeature(feat, "Reset folder and wipe data");
         body.addView(feat, margin());
 
         // paths
         LinearLayout paths = card();
-        paths.addView(Ui.text(this, "📂  PATHS", 12, t.textSub, true));
-        TextView p1 = Ui.text(this,
-                Project.java2dexRoot(this).getAbsolutePath()
-                        + "/<project>/classes.dex", 11.5f, t.text, false);
-        p1.setTypeface(Typeface.MONOSPACE);
-        p1.setTextIsSelectable(true);
+        paths.addView(Ui.text(this, "OUTPUT PATH", 12, t.textSub, true));
+        TextView pathTv = Ui.text(this,
+                Project.java2dexRoot(this).getAbsolutePath() + "/<project>/classes.dex",
+                11.5f, t.text, false);
+        pathTv.setTypeface(Typeface.MONOSPACE);
+        pathTv.setTextIsSelectable(true);
         LinearLayout.LayoutParams pp = new LinearLayout.LayoutParams(-1, -2);
         pp.topMargin = Ui.dp(6);
-        paths.addView(p1, pp);
+        paths.addView(pathTv, pp);
         body.addView(paths, margin());
 
         // developer
         LinearLayout dev = card();
-        dev.addView(Ui.text(this, "👨‍💻  DEVELOPER", 12, t.textSub, true));
+        dev.addView(Ui.text(this, "DEVELOPER", 12, t.textSub, true));
         TextView devBtn = Ui.button(this, "Open Developer Profile", Ui.GREEN);
-        LinearLayout.LayoutParams dbp = new LinearLayout.LayoutParams(-1, -2);
-        dbp.topMargin = Ui.dp(10);
-        dev.addView(devBtn, dbp);
-        devBtn.setOnClickListener(v -> showDeveloper());
+        devBtn.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+        dev.addView(devBtn);
+        devBtn.setOnClickListener(v -> Dialogs.html(this, "👨‍💻 Developer", "developer.html"));
         body.addView(dev, margin());
 
-        TextView foot = Ui.text(this, "Made with ❤ for modders  •  ECJ & D8 by their owners",
-                11, t.textSub, false);
+        TextView foot = Ui.text(this, "Made with love for modders", 11, t.textSub, false);
         foot.setGravity(Gravity.CENTER);
         foot.setPadding(0, Ui.dp(6), 0, Ui.dp(10));
         body.addView(foot);
     }
 
-        private LinearLayout stat(String num, String label) {
+    private LinearLayout stat(String num, String label) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
         c.setGravity(Gravity.CENTER);
@@ -204,35 +191,10 @@ public class InfoActivity extends Activity {
         return c;
     }
 
-    private void feature(LinearLayout parent, String s) {
-        TextView f = Ui.text(this, s, 12.5f, t.text, false);
+    private void addFeature(LinearLayout parent, String s) {
+        TextView f = Ui.text(this, "•  " + s, 12.5f, t.text, false);
         LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-1, -2);
         fp.topMargin = Ui.dp(8);
         parent.addView(f, fp);
-    }
-
-    private void showDeveloper() {
-        FrameLayout wrap = new FrameLayout(this);
-        boolean hasFile = false;
-        try {
-            for (String s : getAssets().list("")) if (s.equals("developer.html")) hasFile = true;
-        } catch (Exception ignored) { }
-        if (hasFile) {
-            WebView wv = new WebView(this);
-            wv.getSettings().setJavaScriptEnabled(true);
-            wv.setBackgroundColor(Color.TRANSPARENT);
-            wv.loadUrl("file:///android_asset/developer.html");
-            wrap.addView(wv, new FrameLayout.LayoutParams(-1, Ui.dp(380)));
-        } else {
-            TextView tv = Ui.text(this, "developer.html not found in assets.", 14, t.text, false);
-            int p = Ui.dp(20);
-            tv.setPadding(p, p, p, p);
-            wrap.addView(tv);
-        }
-        new AlertDialog.Builder(this)
-                .setTitle("👨‍💻  Developer")
-                .setView(wrap)
-                .setPositiveButton("Close", null)
-                .show();
     }
 }
