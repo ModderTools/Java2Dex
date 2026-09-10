@@ -43,4 +43,3 @@ dependencies {
     implementation 'org.eclipse.jdt.core.compiler:ecj:4.6.1'
     implementation 'com.android.tools:r8:2.1.75'
 }
-}
