@@ -1,28 +1,6 @@
 package com.java2dex.app;
 
-import org.jf.dexlib2.AccessFlags;
-import org.jf.dexlib2.dexbacked.DexBackedDexFile;
-import org.jf.dexlib2.iface.ClassDef;
-import org.jf.dexlib2.iface.Field;
-import org.jf.dexlib2.iface.Method;
-import org.jf.dexlib2.iface.MethodImplementation;
-import org.jf.dexlib2.iface.instruction.FiveRegisterInstruction;
-import org.jf.dexlib2.iface.instruction.Instruction;
-import org.jf.dexlib2.iface.instruction.NarrowLiteralInstruction;
-import org.jf.dexlib2.iface.instruction.OffsetInstruction;
-import org.jf.dexlib2.iface.instruction.OneRegisterInstruction;
-import org.jf.dexlib2.iface.instruction.ReferenceInstruction;
-import org.jf.dexlib2.iface.instruction.RegisterRangeInstruction;
-import org.jf.dexlib2.iface.instruction.ThreeRegisterInstruction;
-import org.jf.dexlib2.iface.instruction.TwoRegisterInstruction;
-import org.jf.dexlib2.iface.instruction.WideLiteralInstruction;
-import org.jf.dexlib2.iface.reference.FieldReference;
-import org.jf.dexlib2.iface.reference.MethodReference;
-import org.jf.dexlib2.iface.reference.Reference;
-import org.jf.dexlib2.iface.reference.StringReference;
-import org.jf.dexlib2.iface.reference.TypeReference;
-
-import java.io.BufferedInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.util.ArrayList;
@@ -30,258 +8,651 @@ import java.util.Collections;
 import java.util.List;
 import java.util.TreeSet;
 
-/** Lightweight smali disassembler built on dexlib2 */
+/**
+ * Self-contained DEX parser + smali renderer.
+ * Pure Java — no dexlib2, no guava. Crash-proof by design.
+ */
 public final class SmaliGen {
 
     private SmaliGen() {}
 
-    public static DexBackedDexFile open(File dexFile) throws Exception {
-        BufferedInputStream in = new BufferedInputStream(new FileInputStream(dexFile), 262144);
+    // ================= data model =================
+
+    public static class DexFile {
+        public byte[] d;
+        public String version = "?";
+        int stringIdsSize, stringIdsOff;
+        int typeIdsSize, typeIdsOff;
+        int protoIdsSize, protoIdsOff;
+        int fieldIdsSize, fieldIdsOff;
+        int methodIdsSize, methodIdsOff;
+        int classDefsSize, classDefsOff;
+        public final List<DexClass> classes = new ArrayList<DexClass>();
+        public final List<String> strings = new ArrayList<String>();
+    }
+
+    public static class DexField {
+        public int access;
+        public String name;
+        public String type;
+    }
+
+    public static class DexMethod {
+        public int access;
+        public String name;
+        public String params;
+        public String ret;
+        public int codeOff;
+        public int registers;
+        public int[] insns; // null = no code (abstract/native)
+    }
+
+    public static class DexClass {
+        public int access;
+        public String type;
+        public String superType;
+        public List<String> interfaces = new ArrayList<String>();
+        public List<DexField> staticFields = new ArrayList<DexField>();
+        public List<DexField> instanceFields = new ArrayList<DexField>();
+        public List<DexMethod> directMethods = new ArrayList<DexMethod>();
+        public List<DexMethod> virtualMethods = new ArrayList<DexMethod>();
+
+        public String pretty() { return pretty(type); }
+        public int methodCount() { return directMethods.size() + virtualMethods.size(); }
+        public int fieldCount() { return staticFields.size() + instanceFields.size(); }
+    }
+
+    // ================= primitives =================
+
+    private static int u1(byte[] d, int p) { return d[p] & 0xFF; }
+
+    private static int u2(byte[] d, int p) {
+        return (d[p] & 0xFF) | ((d[p + 1] & 0xFF) << 8);
+    }
+
+    private static int u4(byte[] d, int p) {
+        return (d[p] & 0xFF) | ((d[p + 1] & 0xFF) << 8)
+                | ((d[p + 2] & 0xFF) << 16) | ((d[p + 3] & 0xFF) << 24);
+    }
+
+    private static int uleb(byte[] d, int[] pos) {
+        int r = 0, sh = 0, p = pos[0];
+        while (true) {
+            int b = d[p++] & 0xFF;
+            r |= (b & 0x7F) << sh;
+            if ((b & 0x80) == 0) break;
+            sh += 7;
+        }
+        pos[0] = p;
+        return r;
+    }
+
+    // ================= strings / types =================
+
+    private static String getString(DexFile f, int idx) {
+        if (idx < 0 || idx >= f.stringIdsSize) return "?";
+        int off = u4(f.d, f.stringIdsOff + idx * 4);
+        if (off < 0 || off >= f.d.length) return "?";
+        int[] pos = { off };
+        uleb(f.d, pos); // utf16 size
+        StringBuilder sb = new StringBuilder();
+        int p = pos[0];
+        int end = f.d.length;
+        while (p < end) {
+            int b = f.d[p++] & 0xFF;
+            if (b == 0) break;
+            if (b < 0x80) {
+                sb.append((char) b);
+            } else if ((b & 0xE0) == 0xC0 && p < end) {
+                int b2 = f.d[p++] & 0xFF;
+                sb.append((char) (((b & 0x1F) << 6) | (b2 & 0x3F)));
+            } else if ((b & 0xF0) == 0xE0 && p + 1 < end) {
+                int b2 = f.d[p++] & 0xFF;
+                int b3 = f.d[p++] & 0xFF;
+                sb.append((char) (((b & 0x0F) << 12) | ((b2 & 0x3F) << 6) | (b3 & 0x3F)));
+            } else {
+                sb.append('?');
+            }
+        }
+        return sb.toString();
+    }
+
+    private static String getType(DexFile f, int idx) {
+        if (idx < 0 || idx >= f.typeIdsSize) return "?";
+        return getString(f, u4(f.d, f.typeIdsOff + idx * 4));
+    }
+
+    private static String paramsOf(DexFile f, int protoIdx) {
+        if (protoIdx < 0 || protoIdx >= f.protoIdsSize) return "";
+        int paramsOff = u4(f.d, f.protoIdsOff + protoIdx * 12 + 8);
+        if (paramsOff == 0 || paramsOff + 4 > f.d.length) return "";
+        int n = u4(f.d, paramsOff);
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < n; i++) {
+            sb.append(getType(f, u2(f.d, paramsOff + 4 + i * 2)));
+        }
+        return sb.toString();
+    }
+
+    private static String retOf(DexFile f, int protoIdx) {
+        if (protoIdx < 0 || protoIdx >= f.protoIdsSize) return "?";
+        return getType(f, u4(f.d, f.protoIdsOff + protoIdx * 12 + 4));
+    }
+
+    private static String methodRef(DexFile f, int idx) {
+        if (idx < 0 || idx >= f.methodIdsSize) return "?->?()?";
+        int base = f.methodIdsOff + idx * 8;
+        String cls = getType(f, u2(f.d, base));
+        int proto = u2(f.d, base + 2);
+        String name = getString(f, u4(f.d, base + 4));
+        return cls + "->" + name + "(" + paramsOf(f, proto) + ")" + retOf(f, proto);
+    }
+
+    private static String fieldRef(DexFile f, int idx) {
+        if (idx < 0 || idx >= f.fieldIdsSize) return "?->?:?";
+        int base = f.fieldIdsOff + idx * 8;
+        String cls = getType(f, u2(f.d, base));
+        String typ = getType(f, u2(f.d, base + 2));
+        String name = getString(f, u4(f.d, base + 4));
+        return cls + "->" + name + ":" + typ;
+    }
+
+    // ================= parsing =================
+
+    public static DexFile open(File file) throws Exception {
+        byte[] d = readAll(file);
+        if (d.length < 0x70 || d[0] != 'd' || d[1] != 'e' || d[2] != 'x') {
+            throw new IllegalArgumentException("Not a valid DEX file");
+        }
+        DexFile f = new DexFile();
+        f.d = d;
+        f.version = new String(d, 4, 3);
+        f.stringIdsSize = u4(d, 0x38); f.stringIdsOff = u4(d, 0x3C);
+        f.typeIdsSize = u4(d, 0x40);   f.typeIdsOff = u4(d, 0x44);
+        f.protoIdsSize = u4(d, 0x48);  f.protoIdsOff = u4(d, 0x4C);
+        f.fieldIdsSize = u4(d, 0x50);  f.fieldIdsOff = u4(d, 0x54);
+        f.methodIdsSize = u4(d, 0x58); f.methodIdsOff = u4(d, 0x5C);
+        f.classDefsSize = u4(d, 0x60); f.classDefsOff = u4(d, 0x64);
+
+        TreeSet<String> set = new TreeSet<String>();
+        for (int i = 0; i < f.stringIdsSize; i++) {
+            try { set.add(getString(f, i)); } catch (Throwable ignored) { }
+        }
+        f.strings.addAll(set);
+
+        for (int i = 0; i < f.classDefsSize; i++) {
+            try { f.classes.add(parseClass(f, i)); } catch (Throwable ignored) { }
+        }
+        Collections.sort(f.classes, (a, b) -> a.type.compareTo(b.type));
+        return f;
+    }
+
+    private static byte[] readAll(File file) throws Exception {
+        FileInputStream in = new FileInputStream(file);
         try {
-            return DexBackedDexFile.fromInputStream(null, in);
+            ByteArrayOutputStream bo = new ByteArrayOutputStream();
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            return bo.toByteArray();
         } finally {
             in.close();
         }
     }
 
-    public static List<String> classNames(DexBackedDexFile dex) {
+    private static DexClass parseClass(DexFile f, int i) {
+        int base = f.classDefsOff + i * 32;
+        DexClass c = new DexClass();
+        c.access = u4(f.d, base + 4);
+        c.type = getType(f, u4(f.d, base));
+        int sup = u4(f.d, base + 8);
+        c.superType = (sup == 0xFFFFFFFF) ? null : getType(f, sup);
+
+        int ifOff = u4(f.d, base + 12);
+        if (ifOff != 0 && ifOff + 4 <= f.d.length) {
+            int n = u4(f.d, ifOff);
+            for (int k = 0; k < n; k++) {
+                c.interfaces.add(getType(f, u2(f.d, ifOff + 4 + k * 2)));
+            }
+        }
+
+        int cdo = u4(f.d, base + 24);
+        if (cdo != 0 && cdo < f.d.length) {
+            int[] pos = { cdo };
+            int sf = uleb(f.d, pos);
+            int inf = uleb(f.d, pos);
+            int dm = uleb(f.d, pos);
+            int vm = uleb(f.d, pos);
+
+            int idx = 0, acc;
+            for (int k = 0; k < sf; k++) {
+                idx += uleb(f.d, pos);
+                acc = uleb(f.d, pos);
+                DexField fl = new DexField();
+                fl.access = acc;
+                fl.name = getString(f, u4(f.d, f.fieldIdsOff + idx * 8 + 4));
+                fl.type = getType(f, u2(f.d, f.fieldIdsOff + idx * 8 + 2));
+                c.staticFields.add(fl);
+            }
+            idx = 0;
+            for (int k = 0; k < inf; k++) {
+                idx += uleb(f.d, pos);
+                acc = uleb(f.d, pos);
+                DexField fl = new DexField();
+                fl.access = acc;
+                fl.name = getString(f, u4(f.d, f.fieldIdsOff + idx * 8 + 4));
+                fl.type = getType(f, u2(f.d, f.fieldIdsOff + idx * 8 + 2));
+                c.instanceFields.add(fl);
+            }
+            idx = 0;
+            for (int k = 0; k < dm; k++) {
+                idx += uleb(f.d, pos);
+                acc = uleb(f.d, pos);
+                int code = uleb(f.d, pos);
+                c.directMethods.add(makeMethod(f, idx, acc, code));
+            }
+            idx = 0;
+            for (int k = 0; k < vm; k++) {
+                idx += uleb(f.d, pos);
+                acc = uleb(f.d, pos);
+                int code = uleb(f.d, pos);
+                c.virtualMethods.add(makeMethod(f, idx, acc, code));
+            }
+        }
+        return c;
+    }
+
+    private static DexMethod makeMethod(DexFile f, int idx, int acc, int codeOff) {
+        DexMethod m = new DexMethod();
+        m.access = acc;
+        m.codeOff = codeOff;
+        int base = f.methodIdsOff + idx * 8;
+        m.name = getString(f, u4(f.d, base + 4));
+        int proto = u2(f.d, base + 2);
+        m.params = paramsOf(f, proto);
+        m.ret = retOf(f, proto);
+
+        if (codeOff != 0 && codeOff + 16 <= f.d.length) {
+            m.registers = u2(f.d, codeOff);
+            int insnsSize = u4(f.d, codeOff + 12);
+            if (insnsSize > 0 && codeOff + 16 + insnsSize * 2 <= f.d.length) {
+                m.insns = new int[insnsSize];
+                for (int k = 0; k < insnsSize; k++) {
+                    m.insns[k] = u2(f.d, codeOff + 16 + k * 2);
+                }
+            }
+        }
+        return m;
+    }
+
+    // ================= public helpers =================
+
+    public static List<String> classNames(DexFile f) {
         List<String> out = new ArrayList<String>();
-        for (ClassDef c : dex.getClasses()) out.add(pretty(c.getType()));
-        Collections.sort(out);
+        for (DexClass c : f.classes) out.add(pretty(c.type));
         return out;
     }
 
-    /** collects all string constants referenced by methods (dexlib2-safe) */
-    public static List<String> stringList(DexBackedDexFile dex) {
-        TreeSet<String> set = new TreeSet<String>();
-        try {
-            for (ClassDef c : dex.getClasses()) {
-                for (Method m : c.getMethods()) {
-                    MethodImplementation impl = m.getImplementation();
-                    if (impl == null) continue;
-                    for (Instruction ins : impl.getInstructions()) {
-                        if (ins instanceof ReferenceInstruction) {
-                            Reference r = ((ReferenceInstruction) ins).getReference();
-                            if (r instanceof StringReference) {
-                                set.add(((StringReference) r).getString());
-                            }
-                        }
-                    }
-                }
-            }
-        } catch (Throwable ignored) { }
-        return new ArrayList<String>(set);
+    public static List<String> stringList(DexFile f) {
+        return f.strings;
     }
 
-    public static String pretty(String type) {
-        if (type != null && type.length() > 2 && type.charAt(0) == 'L'
-                && type.charAt(type.length() - 1) == ';') {
-            return type.substring(1, type.length() - 1).replace('/', '.');
-        }
-        return type == null ? "?" : type;
-    }
-
-    public static ClassDef findClass(DexBackedDexFile dex, String prettyName) {
+    public static DexClass findClass(DexFile f, String prettyName) {
         String raw = "L" + prettyName.replace('.', '/') + ";";
-        for (ClassDef c : dex.getClasses()) {
-            if (raw.equals(c.getType())) return c;
+        for (DexClass c : f.classes) {
+            if (c.type.equals(raw)) return c;
         }
         return null;
     }
 
-    public static String renderClass(ClassDef c) {
+    public static String pretty(String t) {
+        if (t != null && t.length() > 2 && t.charAt(0) == 'L'
+                && t.charAt(t.length() - 1) == ';') {
+            return t.substring(1, t.length() - 1).replace('/', '.');
+        }
+        return t == null ? "?" : t;
+    }
+
+    // ================= access flags =================
+
+    private static void add(StringBuilder b, int flags, int bit, String s) {
+        if ((flags & bit) != 0) b.append(s).append(' ');
+    }
+
+    private static String acc(int flags, int kind) {
+        // kind: 0=class 1=field 2=method
         StringBuilder b = new StringBuilder();
-        b.append(".class ").append(AccessFlags.formatAccessFlagsForClass(c.getAccessFlags()))
-                .append(c.getType()).append('\n');
-        if (c.getSuperclass() != null) {
-            b.append(".super ").append(c.getSuperclass()).append('\n');
-        }
-        for (String i : c.getInterfaces()) {
-            b.append(".implements ").append(i).append('\n');
-        }
-        b.append('\n');
-        for (Field f : c.getFields()) {
-            b.append(".field ").append(AccessFlags.formatAccessFlagsForField(f.getAccessFlags()))
-                    .append(f.getName()).append(':').append(f.getType());
-            try {
-                Object v = f.getInitialValue();
-                if (v != null) b.append(" = ").append(litValue(v));
-            } catch (Throwable ignored) { }
-            b.append('\n');
-        }
-        b.append('\n');
-        for (Method m : c.getMethods()) {
-            b.append(".method ").append(AccessFlags.formatAccessFlagsForMethod(m.getAccessFlags()))
-                    .append(m.getName()).append('(');
-            for (Object t : m.getParameterTypes()) b.append(t);
-            b.append(')').append(m.getReturnType()).append('\n');
-            MethodImplementation impl = m.getImplementation();
-            if (impl != null) {
-                b.append("    .registers ").append(impl.getRegisterCount()).append('\n');
-                for (Instruction ins : impl.getInstructions()) {
-                    b.append("    ").append(fmt(ins)).append('\n');
-                }
-            }
-            b.append(".end method\n\n");
+        add(b, flags, 0x1, "public");
+        add(b, flags, 0x2, "private");
+        add(b, flags, 0x4, "protected");
+        add(b, flags, 0x8, "static");
+        add(b, flags, 0x10, "final");
+        if (kind == 2) {
+            add(b, flags, 0x20, "synchronized");
+            add(b, flags, 0x40, "bridge");
+            add(b, flags, 0x80, "varargs");
+            add(b, flags, 0x100, "native");
+            add(b, flags, 0x400, "abstract");
+            add(b, flags, 0x800, "strictfp");
+            add(b, flags, 0x1000, "synthetic");
+            add(b, flags, 0x10000, "constructor");
+        } else if (kind == 1) {
+            add(b, flags, 0x40, "volatile");
+            add(b, flags, 0x80, "transient");
+            add(b, flags, 0x1000, "synthetic");
+            add(b, flags, 0x4000, "enum");
+        } else {
+            add(b, flags, 0x200, "interface");
+            add(b, flags, 0x400, "abstract");
+            add(b, flags, 0x1000, "synthetic");
+            add(b, flags, 0x2000, "annotation");
+            add(b, flags, 0x4000, "enum");
         }
         return b.toString();
     }
 
-    private static String litValue(Object v) {
-        if (v instanceof String) return quote((String) v);
-        return String.valueOf(v);
+    // ================= smali rendering =================
+
+    public static String renderClass(DexClass c) {
+        StringBuilder b = new StringBuilder();
+        b.append(".class ").append(acc(c.access, 0)).append(c.type).append('\n');
+        if (c.superType != null) b.append(".super ").append(c.superType).append('\n');
+        for (String i : c.interfaces) b.append(".implements ").append(i).append('\n');
+        b.append('\n');
+
+        if (!c.staticFields.isEmpty()) {
+            b.append("# static fields\n");
+            for (DexField fl : c.staticFields) {
+                b.append(".field ").append(acc(fl.access, 1))
+                        .append(fl.name).append(':').append(fl.type).append('\n');
+            }
+            b.append('\n');
+        }
+        if (!c.instanceFields.isEmpty()) {
+            b.append("# instance fields\n");
+            for (DexField fl : c.instanceFields) {
+                b.append(".field ").append(acc(fl.access, 1))
+                        .append(fl.name).append(':').append(fl.type).append('\n');
+            }
+            b.append('\n');
+        }
+        if (!c.directMethods.isEmpty()) {
+            b.append("# direct methods\n");
+            for (DexMethod m : c.directMethods) b.append(renderMethod(m));
+        }
+        if (!c.virtualMethods.isEmpty()) {
+            b.append("# virtual methods\n");
+            for (DexMethod m : c.virtualMethods) b.append(renderMethod(m));
+        }
+        return b.toString();
     }
 
-    private static String fmt(Instruction ins) {
-        try {
-            StringBuilder b = new StringBuilder(ins.getOpcode().name);
-
-            if (ins instanceof ReferenceInstruction) {
-                b.append(' ').append(simpleRegs(ins))
-                        .append(", ").append(refStr(((ReferenceInstruction) ins).getReference()));
-                return b.toString();
-            }
-            if (ins instanceof RegisterRangeInstruction) {
-                b.append(' ').append(rangeRegs((RegisterRangeInstruction) ins));
-                return b.toString();
-            }
-            if (ins instanceof WideLiteralInstruction) {
-                long lit = ((WideLiteralInstruction) ins).getWideLiteral();
-                if (ins instanceof OneRegisterInstruction) {
-                    b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA())
-                            .append(", ").append(lit);
-                } else {
-                    b.append(' ').append(lit);
-                }
-                return b.toString();
-            }
-            if (ins instanceof NarrowLiteralInstruction) {
-                long lit = ((NarrowLiteralInstruction) ins).getNarrowLiteral();
-                if (ins instanceof TwoRegisterInstruction) {
-                    TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
-                    b.append(" v").append(t.getRegisterA()).append(", v")
-                            .append(t.getRegisterB()).append(", ").append(lit);
-                } else if (ins instanceof OneRegisterInstruction) {
-                    b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA())
-                            .append(", ").append(lit);
-                } else {
-                    b.append(' ').append(lit);
-                }
-                return b.toString();
-            }
-            if (ins instanceof OffsetInstruction) {
-                int off = ((OffsetInstruction) ins).getCodeOffset();
-                if (ins instanceof TwoRegisterInstruction) {
-                    TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
-                    b.append(" v").append(t.getRegisterA()).append(", v").append(t.getRegisterB());
-                } else if (ins instanceof OneRegisterInstruction) {
-                    b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA());
-                }
-                b.append("  # +").append(off);
-                return b.toString();
-            }
-            if (ins instanceof ThreeRegisterInstruction) {
-                ThreeRegisterInstruction t = (ThreeRegisterInstruction) ins;
-                b.append(" v").append(t.getRegisterA()).append(", v")
-                        .append(t.getRegisterB()).append(", v").append(t.getRegisterC());
-                return b.toString();
-            }
-            if (ins instanceof TwoRegisterInstruction) {
-                TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
-                b.append(" v").append(t.getRegisterA()).append(", v").append(t.getRegisterB());
-                return b.toString();
-            }
-            if (ins instanceof OneRegisterInstruction) {
-                b.append(" v").append(((OneRegisterInstruction) ins).getRegisterA());
-                return b.toString();
-            }
-            if (ins instanceof FiveRegisterInstruction) {
-                b.append(' ').append(simpleRegs(ins));
-                return b.toString();
-            }
+    private static String renderMethod(DexMethod m) {
+        StringBuilder b = new StringBuilder();
+        b.append(".method ").append(acc(m.access, 2)).append(m.name)
+                .append('(').append(m.params).append(')').append(m.ret).append('\n');
+        if (m.insns == null || m.insns.length == 0) {
+            b.append(".end method\n\n");
             return b.toString();
-        } catch (Throwable t) {
-            return ins.getOpcode().name;
         }
-    }
-
-    private static String rangeRegs(RegisterRangeInstruction r) {
-        int n = r.getRegisterCount();
-        int s = r.getStartRegister();
-        if (n <= 0) return "{}";
-        if (n == 1) return "{v" + s + "}";
-        return "{v" + s + " .. v" + (s + n - 1) + "}";
-    }
-
-    private static String simpleRegs(Instruction ins) {
-        if (ins instanceof FiveRegisterInstruction) {
-            int count = regCount(ins, 5);
-            StringBuilder b = new StringBuilder("{");
-            for (int i = 0; i < count && i < 5; i++) {
-                if (i > 0) b.append(", ");
-                b.append('v').append(regIndex(ins, i));
+        b.append("    .registers ").append(m.registers).append('\n');
+        int p = 0;
+        while (p < m.insns.length) {
+            try {
+                int w = insnWidth(m.insns, p);
+                if (w <= 0 || p + w > m.insns.length) {
+                    b.append("    # truncated\n");
+                    break;
+                }
+                String line = decode(m.insns, p, w);
+                if (line != null) b.append("    ").append(line).append('\n');
+                p += w;
+            } catch (Throwable t) {
+                b.append("    # decode error\n");
+                break;
             }
-            return b.append('}').toString();
         }
-        if (ins instanceof TwoRegisterInstruction) {
-            TwoRegisterInstruction t = (TwoRegisterInstruction) ins;
-            return "v" + t.getRegisterA() + ", v" + t.getRegisterB();
-        }
-        if (ins instanceof OneRegisterInstruction) {
-            return "v" + ((OneRegisterInstruction) ins).getRegisterA();
-        }
-        return "";
+        b.append(".end method\n\n");
+        return b.toString();
     }
 
-    /** safe register count — works across dexlib2 versions */
-    private static int regCount(Object ins, int def) {
-        try {
-            java.lang.reflect.Method m = ins.getClass().getMethod("getRegisterCount");
-            Object r = m.invoke(ins);
-            return ((Integer) r).intValue();
-        } catch (Throwable ignored) { }
-        return def;
+    // ================= instruction engine =================
+
+    private static final String[] OPNAMES = new String[256];
+    private static final byte[] WTABLE = new byte[256];
+
+    static {
+        String[] head = {
+                "nop", "move", "move/from16", "move/16", "move-wide", "move-wide/from16",
+                "move-wide/16", "move-object", "move-object/from16", "move-object/16",
+                "move-result", "move-result-wide", "move-result-object", "move-exception",
+                "return-void", "return", "return-wide", "return-object",
+                "const/4", "const/16", "const", "const/high16",
+                "const-wide/16", "const-wide/32", "const-wide", "const-wide/high16",
+                "const-string", "const-string/jumbo", "const-class",
+                "monitor-enter", "monitor-exit", "check-cast", "instance-of",
+                "array-length", "new-instance", "new-array",
+                "filled-new-array", "filled-new-array/range", "fill-array-data",
+                "throw", "goto", "goto/16", "goto/32",
+                "packed-switch", "sparse-switch",
+                "cmpl-float", "cmpg-float", "cmpl-double", "cmpg-double", "cmp-long",
+                "if-eq", "if-ne", "if-lt", "if-ge", "if-gt", "if-le",
+                "if-eqz", "if-nez", "if-ltz", "if-gez", "if-gtz", "if-lez"
+        };
+        for (int i = 0; i < head.length; i++) OPNAMES[i] = head[i]; // 0x00..0x3D
+
+        String[] arr = {"aget", "aget-wide", "aget-object", "aget-boolean", "aget-byte",
+                "aget-char", "aget-short", "aput", "aput-wide", "aput-object",
+                "aput-boolean", "aput-byte", "aput-char", "aput-short"};
+        for (int i = 0; i < arr.length; i++) OPNAMES[0x44 + i] = arr[i];
+
+        String[] ifld = {"iget", "iget-wide", "iget-object", "iget-boolean", "iget-byte",
+                "iget-char", "iget-short", "iput", "iput-wide", "iput-object",
+                "iput-boolean", "iput-byte", "iput-char", "iput-short"};
+        for (int i = 0; i < ifld.length; i++) OPNAMES[0x52 + i] = ifld[i];
+
+        String[] sfld = {"sget", "sget-wide", "sget-object", "sget-boolean", "sget-byte",
+                "sget-char", "sget-short", "sput", "sput-wide", "sput-object",
+                "sput-boolean", "sput-byte", "sput-char", "sput-short"};
+        for (int i = 0; i < sfld.length; i++) OPNAMES[0x60 + i] = sfld[i];
+
+        String[] inv = {"invoke-virtual", "invoke-super", "invoke-direct",
+                "invoke-static", "invoke-interface"};
+        for (int i = 0; i < inv.length; i++) OPNAMES[0x6E + i] = inv[i];
+
+        String[] invr = {"invoke-virtual/range", "invoke-super/range",
+                "invoke-direct/range", "invoke-static/range", "invoke-interface/range"};
+        for (int i = 0; i < invr.length; i++) OPNAMES[0x74 + i] = invr[i];
+
+        String[] unop = {"neg-int", "not-int", "neg-long", "not-long", "neg-float",
+                "neg-double", "int-to-long", "int-to-float", "int-to-double",
+                "long-to-int", "long-to-float", "long-to-double",
+                "float-to-int", "float-to-long", "float-to-double",
+                "double-to-int", "double-to-long", "double-to-float",
+                "int-to-byte", "int-to-char", "int-to-short"};
+        for (int i = 0; i < unop.length; i++) OPNAMES[0x7B + i] = unop[i];
+
+        String[] binop = {"add-int", "sub-int", "mul-int", "div-int", "rem-int",
+                "and-int", "or-int", "xor-int", "shl-int", "shr-int", "ushr-int",
+                "add-long", "sub-long", "mul-long", "div-long", "rem-long",
+                "and-long", "or-long", "xor-long", "shl-long", "shr-long", "ushr-long",
+                "add-float", "sub-float", "mul-float", "div-float", "rem-float",
+                "add-double", "sub-double", "mul-double", "div-double", "rem-double"};
+        for (int i = 0; i < binop.length; i++) OPNAMES[0x90 + i] = binop[i];
+        for (int i = 0; i < binop.length; i++) OPNAMES[0xB0 + i] = binop[i] + "/2addr";
+
+        String[] lit16 = {"add-int/lit16", "rsub-int", "mul-int/lit16", "div-int/lit16",
+                "rem-int/lit16", "and-int/lit16", "or-int/lit16", "xor-int/lit16"};
+        for (int i = 0; i < lit16.length; i++) OPNAMES[0xD0 + i] = lit16[i];
+
+        String[] lit8 = {"add-int/lit8", "rsub-int/lit8", "mul-int/lit8", "div-int/lit8",
+                "rem-int/lit8", "and-int/lit8", "or-int/lit8", "xor-int/lit8",
+                "shl-int/lit8", "shr-int/lit8", "ushr-int/lit8"};
+        for (int i = 0; i < lit8.length; i++) OPNAMES[0xD8 + i] = lit8[i];
+
+        String[] tail = {"invoke-polymorphic", "invoke-polymorphic/range",
+                "invoke-custom", "invoke-custom/range",
+                "const-method-handle", "const-method-type"};
+        for (int i = 0; i < tail.length; i++) OPNAMES[0xFA + i] = tail[i];
+
+        // ---- widths (in 16-bit code units) ----
+        java.util.Arrays.fill(WTABLE, (byte) 1);
+        w(0x02, 2); w(0x05, 2); w(0x08, 2);
+        w(0x03, 3); w(0x06, 3); w(0x09, 3);
+        w(0x13, 2); w(0x15, 2); w(0x16, 2); w(0x19, 2);
+        w(0x14, 3); w(0x17, 3);
+        w(0x18, 5);
+        w(0x1A, 2); w(0x1B, 3); w(0x1C, 2); w(0x1F, 2); w(0x20, 2);
+        w(0x22, 2); w(0x23, 2);
+        w(0x24, 3); w(0x25, 3); w(0x26, 3);
+        w(0x29, 2); w(0x2A, 3); w(0x2B, 3); w(0x2C, 3);
+        for (int i = 0x32; i <= 0x37; i++) w(i, 2);
+        for (int i = 0x44; i <= 0x51; i++) w(i, 2);
+        for (int i = 0x52; i <= 0x5F; i++) w(i, 2);
+        for (int i = 0x60; i <= 0x6D; i++) w(i, 2);
+        for (int i = 0x6E; i <= 0x72; i++) w(i, 3);
+        for (int i = 0x74; i <= 0x78; i++) w(i, 3);
+        for (int i = 0x90; i <= 0xAF; i++) w(i, 2);
+        for (int i = 0xD0; i <= 0xD7; i++) w(i, 2);
+        for (int i = 0xD8; i <= 0xE2; i++) w(i, 2);
+        w(0xFA, 4); w(0xFB, 4); w(0xFC, 3); w(0xFD, 3); w(0xFE, 2); w(0xFF, 2);
     }
 
-    /** safe register lookup — getRegister(int) OR getRegisterA..E */
-    private static int regIndex(Object ins, int i) {
-        try {
-            java.lang.reflect.Method m = ins.getClass().getMethod("getRegister", int.class);
-            Object r = m.invoke(ins, Integer.valueOf(i));
-            return ((Integer) r).intValue();
-        } catch (Throwable ignored) { }
-        try {
-            String[] names = {"getRegisterA", "getRegisterB", "getRegisterC",
-                    "getRegisterD", "getRegisterE"};
-            if (i >= 0 && i < names.length) {
-                java.lang.reflect.Method m = ins.getClass().getMethod(names[i]);
-                Object r = m.invoke(ins);
-                return ((Integer) r).intValue();
-            }
-        } catch (Throwable ignored) { }
-        return 0;
-    }
+    private static void w(int op, int units) { WTABLE[op] = (byte) units; }
 
-    private static String refStr(Reference r) {
-        try {
-            if (r instanceof StringReference) return quote(((StringReference) r).getString());
-            if (r instanceof MethodReference) {
-                MethodReference m = (MethodReference) r;
-                StringBuilder b = new StringBuilder(m.getDefiningClass())
-                        .append("->").append(m.getName()).append('(');
-                for (Object t : m.getParameterTypes()) b.append(t);
-                return b.append(')').append(m.getReturnType()).toString();
+    private static int insnWidth(int[] ins, int p) {
+        int u = ins[p];
+        int op = u & 0xFF;
+        if (op == 0x00) {
+            int hi = (u >> 8) & 0xFF;
+            if (hi == 0x01 && p + 1 < ins.length) { // packed-switch-payload
+                int size = ins[p + 1];
+                return 4 + 2 * size;
             }
-            if (r instanceof FieldReference) {
-                FieldReference f = (FieldReference) r;
-                return f.getDefiningClass() + "->" + f.getName() + ':' + f.getType();
+            if (hi == 0x02 && p + 1 < ins.length) { // sparse-switch-payload
+                int size = ins[p + 1];
+                return 2 + 4 * size;
             }
-            if (r instanceof TypeReference) return ((TypeReference) r).getType();
-            return String.valueOf(r);
-        } catch (Throwable t) {
-            return "?";
+            if (hi == 0x03 && p + 3 < ins.length) { // fill-array-data-payload
+                int ew = ins[p + 1];
+                int size = ins[p + 2] | (ins[p + 3] << 16);
+                return 4 + (size * ew + 1) / 2;
+            }
+            return 1; // nop
         }
+        return WTABLE[op];
     }
+
+    private static int s4(int v) { v &= 0xF; return (v >= 8) ? v - 16 : v; }
+    private static int s8(int v) { v &= 0xFF; return (v >= 128) ? v - 256 : v; }
+    private static int s16(int v) { v &= 0xFFFF; return (v >= 0x8000) ? v - 0x10000 : v; }
+    private static int s32(int lo, int hi) { return lo | (hi << 16); }
+    private static String hex(int v) { return "0x" + Integer.toHexString(v); }
+
+    private static String inv35c(String ref, int count, int regsUnit) {
+        int C = regsUnit & 0xF, D = (regsUnit >> 4) & 0xF;
+        int E = (regsUnit >> 8) & 0xF, F = (regsUnit >> 12) & 0xF;
+        int[] r = {C, D, E, F};
+        StringBuilder b = new StringBuilder("{");
+        for (int i = 0; i < count && i < 4; i++) {
+            if (i > 0) b.append(", ");
+            b.append('v').append(r[i]);
+        }
+        b.append("}, ").append(ref);
+        return b.toString();
+    }
+
+    private static String inv3rc(String ref, int count, int start) {
+        if (count <= 0) return "{}" + ", " + ref;
+        return "{v" + start + " .. v" + (start + count - 1) + "}, " + ref;
+    }
+
+    /** decodes one instruction to smali text; null = skip (payload) */
+    private static String decode(int[] ins, int p, int width) {
+        int u = ins[p];
+        int op = u & 0xFF;
+        if (op == 0x00) {
+            if (width > 1) return "# payload (" + width + " units)";
+            return OPNAMES[0];
+        }
+        String name = OPNAMES[op] != null ? OPNAMES[op] : ("op_" + hex(op));
+        int AA = (u >> 8) & 0xFF;
+        int A = (u >> 8) & 0x0F;
+        int B = (u >> 12) & 0x0F;
+        int u2 = width >= 2 ? ins[p + 1] : 0;
+        int u3 = width >= 3 ? ins[p + 2] : 0;
+        int u4 = width >= 4 ? ins[p + 3] : 0;
+
+        // mov 12x / result 11x / return / monitor / throw
+        if (op == 0x01 || op == 0x04 || op == 0x07 || op == 0x21
+                || (op >= 0x7B && op <= 0x8F) || (op >= 0xB0 && op <= 0xCF)) {
+            return name + " v" + A + ", v" + B;
+        }
+        if (op == 0x02 || op == 0x05 || op == 0x08) return name + " v" + AA + ", v" + u2;
+        if (op == 0x03 || op == 0x06 || op == 0x09)
+            return name + " v" + AA + ", v" + u2 + ", v" + u3;
+        if ((op >= 0x0A && op <= 0x0D) || (op >= 0x0F && op <= 0x11)
+                || op == 0x1D || op == 0x1E || op == 0x27) {
+            return name + " v" + AA;
+        }
+        if (op == 0x0E) return name;
+        if (op == 0x12) return name + " v" + A + ", " + s4(B);
+        if (op == 0x13 || op == 0x16) return name + " v" + AA + ", " + s16(u2);
+        if (op == 0x14 || op == 0x17) return name + " v" + AA + ", " + s32(u2, u3);
+        if (op == 0x15 || op == 0x19) return name + " v" + AA + ", 0x" + Integer.toHexString(u2 << 16);
+        if (op == 0x18) {
+            long lit = (u2 & 0xFFFFL) | ((u3 & 0xFFFFL) << 16)
+                    | ((u4 & 0xFFFFL) << 32) | ((ins[p + 4] & 0xFFFFL) << 48);
+            return name + " v" + AA + ", " + lit;
+        }
+        if (op == 0x1A) return name + " v" + AA + ", " + quote(smaliString(smaliStringIdx(u2)));
+        if (op == 0x1B) return name + " v" + AA + ", " + quote(smaliString(smaliStringIdx(u2 | (u3 << 16))));
+        if (op == 0x1C || op == 0x1F || op == 0x22)
+            return name + " v" + AA + ", " + smaliType(u2);
+        if (op == 0x20 || op == 0x23)
+            return name + " v" + A + ", v" + B + ", " + smaliType(u2);
+        if (op == 0x24) return name + " " + inv35c(smaliMethod(u2), A, u3);
+        if (op == 0x25 || (op >= 0x74 && op <= 0x78))
+            return name + " " + inv3rc(smaliMethod(u2), AA, u3);
+        if (op == 0x26 || op == 0x2B || op == 0x2C)
+            return name + " v" + AA + ", -> " + hex(p + s32(u2, u3));
+        if (op == 0x28) return name + " -> " + hex(p + s8(AA));
+        if (op == 0x29) return name + " -> " + hex(p + s16(u2));
+        if (op == 0x2A) return name + " -> " + hex(p + s32(u2, u3));
+        if ((op >= 0x2D && op <= 0x31) || (op >= 0x44 && op <= 0x51) || (op >= 0x90 && op <= 0xAF)) {
+            return name + " v" + AA + ", v" + (u2 >> 8) + ", v" + (u2 & 0xFF);
+        }
+        if (op >= 0x32 && op <= 0x37)
+            return name + " v" + A + ", v" + B + ", -> " + hex(p + s16(u2));
+        if (op >= 0x38 && op <= 0x3D)
+            return name + " v" + AA + ", -> " + hex(p + s16(u2));
+        if (op >= 0x52 && op <= 0x5F)
+            return name + " v" + A + ", v" + B + ", " + smaliField(u2);
+        if (op >= 0x60 && op <= 0x6D)
+            return name + " v" + AA + ", " + smaliField(u2);
+        if (op >= 0x6E && op <= 0x72) return name + " " + inv35c(smaliMethod(u2), A, u3);
+        if (op >= 0xD0 && op <= 0xD7)
+            return name + " v" + A + ", v" + B + ", " + s16(u2);
+        if (op >= 0xD8 && op <= 0xE2)
+            return name + " v" + AA + ", v" + (u2 >> 8) + ", " + s8(u2 & 0xFF);
+        if (op == 0xFA) return name + " " + inv35c(smaliMethod(u2), A, u3)
+                + ", proto@" + u4;
+        if (op == 0xFB) return name + " " + inv3rc(smaliMethod(u2), AA, u3)
+                + ", proto@" + u4;
+        if (op == 0xFC) return name + " " + inv35c("callsite@" + u2, A, u3);
+        if (op == 0xFD) return name + " " + inv3rc("callsite@" + u2, AA, u3);
+        if (op == 0xFE) return name + " v" + AA + ", mh@" + u2;
+        if (op == 0xFF) return name + " v" + AA + ", proto@" + u2;
+        return name;
+    }
+
+    // per-dex-file resolvers (static context bound to current parse)
+    private static DexFile cur;
+    private static int smaliStringIdx(int idx) { return idx; }
+    private static String smaliString(int idx) { return getString(cur, idx); }
+    private static String smaliType(int idx) { return getType(cur, idx); }
+    private static String smaliMethod(int idx) { return methodRef(cur, idx); }
+    private static String smaliField(int idx) { return fieldRef(cur, idx); }
 
     private static String quote(String s) {
         StringBuilder b = new StringBuilder("\"");
@@ -295,5 +666,15 @@ public final class SmaliGen {
             else b.append(ch);
         }
         return b.append('"').toString();
+    }
+
+    /** renders with the dex bound for reference resolution */
+    public static String renderClass(DexFile f, DexClass c) {
+        cur = f;
+        try {
+            return renderClass(c);
+        } finally {
+            cur = null;
+        }
     }
 }
