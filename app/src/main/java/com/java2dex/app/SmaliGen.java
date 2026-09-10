@@ -57,7 +57,7 @@ public final class SmaliGen {
         public List<DexMethod> directMethods = new ArrayList<DexMethod>();
         public List<DexMethod> virtualMethods = new ArrayList<DexMethod>();
 
-        public String pretty() { return pretty(type); }
+        public String pretty() { return SmaliGen.pretty(type); }
         public int methodCount() { return directMethods.size() + virtualMethods.size(); }
         public int fieldCount() { return staticFields.size() + instanceFields.size(); }
     }
