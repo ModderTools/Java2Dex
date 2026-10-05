@@ -26,6 +26,8 @@ public class Project {
     public int status = ST_NONE;
     public long dexSize;
 
+    private static final Object LOCK = new Object();
+
     private static SharedPreferences prefs(Context c) {
         return c.getApplicationContext().getSharedPreferences("j2d_projects", Context.MODE_PRIVATE);
     }
@@ -51,32 +53,90 @@ public class Project {
     }
 
     public static void upsert(Context c, Project p) {
-        List<Project> list = allInOrder(c);
-        for (int i = 0; i < list.size(); i++) {
-            if (list.get(i).id.equals(p.id)) {
-                list.set(i, p);
-                saveAll(c, list);
-                return;
+        synchronized (LOCK) {
+            List<Project> list = allInOrder(c);
+            for (int i = 0; i < list.size(); i++) {
+                if (list.get(i).id.equals(p.id)) {
+                    list.set(i, p);
+                    saveAll(c, list);
+                    return;
+                }
             }
+            list.add(p);
+            saveAll(c, list);
         }
-        list.add(p);
-        saveAll(c, list);
     }
 
     public static void delete(Context c, String id) {
-        Project p = byId(c, id);
-        if (p != null) {
-            deleteDir(p.dir(c));
-            deleteDir(p.publicDexDir(c));
+        synchronized (LOCK) {
+            Project p = byId(c, id);
+            if (p != null) {
+                deleteDir(p.dir(c));
+                File pub = p.publicDexDirNoCreate(c);
+                if (pub.exists() && !isSharedWithOthers(c, p)) deleteDir(pub);
+            }
+            List<Project> list = allInOrder(c);
+            List<Project> keep = new ArrayList<>();
+            for (Project x : list) if (!x.id.equals(id)) keep.add(x);
+            saveAll(c, keep);
         }
-        List<Project> list = allInOrder(c);
-        List<Project> keep = new ArrayList<>();
-        for (Project x : list) if (!x.id.equals(id)) keep.add(x);
-        saveAll(c, keep);
+    }
+
+    /** true when another project writes into the same output folder name */
+    private static boolean isSharedWithOthers(Context c, Project me) {
+        for (Project x : allInOrder(c)) {
+            if (!x.id.equals(me.id) && x.safeName().equals(me.safeName())) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Removes only DEX + smali output of every project (never the folder itself,
+     * so a custom output folder like /storage/emulated/0 can never be wiped).
+     */
+    public static int cleanOutputs(Context c) {
+        int n = 0;
+        for (Project p : allInOrder(c)) {
+            File pub = p.publicDexDirNoCreate(c);
+            if (!pub.exists()) continue;
+            File[] fs = pub.listFiles();
+            if (fs != null) for (File f : fs) {
+                String nm = f.getName();
+                if (nm.equals("smali") || (nm.startsWith("classes") && nm.endsWith(".dex"))) {
+                    deleteDir(f);
+                    n++;
+                }
+            }
+            String[] left = pub.list();
+            if (left != null && left.length == 0) pub.delete();
+            p.status = ST_NONE;
+            p.dexSize = 0;
+            upsert(c, p);
+        }
+        return n;
+    }
+
+    /** "Name", "Name (2)", "Name (3)" … so two projects never share an output folder */
+    public static String uniqueName(Context c, String wanted) {
+        String base = wanted == null ? "" : wanted.trim();
+        if (base.length() == 0) base = "project";
+        List<Project> all = allInOrder(c);
+        String cand = base;
+        int i = 2;
+        while (true) {
+            boolean clash = false;
+            Project probe = new Project();
+            probe.name = cand;
+            for (Project x : all) {
+                if (x.safeName().equalsIgnoreCase(probe.safeName())) { clash = true; break; }
+            }
+            if (!clash) return cand;
+            cand = base + " (" + i++ + ")";
+        }
     }
 
     public static void clearAll(Context c) {
-        prefs(c).edit().clear().apply();
+        synchronized (LOCK) { prefs(c).edit().clear().apply(); }
     }
 
     private static void saveAll(Context c, List<Project> list) {
@@ -130,7 +190,32 @@ public class Project {
         return f;
     }
 
+    public File publicDexDirNoCreate(Context c) { return new File(java2dexRootNoCreate(c), safeName()); }
+
     public File publicDexFile(Context c) { return new File(publicDexDir(c), "classes.dex"); }
+
+    /** every classes*.dex produced by the last build (multi-dex aware), sorted */
+    public List<File> publicDexFiles(Context c) {
+        List<File> out = new ArrayList<>();
+        File[] fs = publicDexDirNoCreate(c).listFiles();
+        if (fs != null) for (File f : fs) {
+            String n = f.getName();
+            if (f.isFile() && n.startsWith("classes") && n.endsWith(".dex")) out.add(f);
+        }
+        Collections.sort(out, (a, b) -> dexOrder(a.getName()) - dexOrder(b.getName()));
+        return out;
+    }
+
+    private static int dexOrder(String n) {
+        String mid = n.substring("classes".length(), n.length() - ".dex".length());
+        if (mid.length() == 0) return 1;
+        try { return Integer.parseInt(mid); } catch (Exception e) { return 9999; }
+    }
+
+    public int libCount(Context c) {
+        File[] fs = libsDir(c).listFiles();
+        return fs == null ? 0 : fs.length;
+    }
     public File smaliDir(Context c)      { return new File(publicDexDir(c), "smali"); }
 
     public String safeName() {
@@ -140,20 +225,22 @@ public class Project {
 
     /** custom folder if chosen in Settings, else /storage/emulated/0/Java2Dex */
     public static File java2dexRoot(Context c) {
-        String custom = Prefs.folder(c);
-        File f;
-        if (custom != null && custom.trim().length() > 0) {
-            f = new File(custom.trim());
-        } else {
-            f = new File(Environment.getExternalStorageDirectory(), "Java2Dex");
-        }
+        File f = java2dexRootNoCreate(c);
         if (!f.exists()) f.mkdirs();
         return f;
+    }
+
+    public static File java2dexRootNoCreate(Context c) {
+        String custom = Prefs.folder(c);
+        if (custom != null && custom.trim().length() > 0) return new File(custom.trim());
+        return new File(Environment.getExternalStorageDirectory(), "Java2Dex");
     }
 
     public String createdText() { return fmt(createdAt); }
 
     public String dateText() { return builtAt <= 0 ? "Never built" : fmt(builtAt); }
+
+    public static String fmtTime(long t) { return fmt(t); }
 
     private static String fmt(long t) {
         return new SimpleDateFormat("dd MMM yyyy, HH:mm", Locale.US).format(new Date(t));

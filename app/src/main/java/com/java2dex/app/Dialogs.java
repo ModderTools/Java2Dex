@@ -8,7 +8,10 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.content.Intent;
+import android.net.Uri;
 import android.webkit.WebView;
+import android.webkit.WebViewClient;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.TextView;
@@ -55,7 +58,7 @@ public final class Dialogs {
         root.addView(head, new LinearLayout.LayoutParams(-1, -2));
 
         // ---- web area (scrollable inside WebView) ----
-        FrameLayout webWrap = new FrameLayout(a);
+        final FrameLayout webWrap = new FrameLayout(a);
         webWrap.setBackground(Ui.outline(t.inputBg, t.cardStroke, 14, 1, a));
         int wp = Ui.dp(3);
         webWrap.setPadding(wp, wp, wp, wp);
@@ -66,12 +69,33 @@ public final class Dialogs {
         } catch (Throwable ignored) { }
 
         if (has) {
-            WebView wv = new WebView(a);
+            final WebView wv = new WebView(a);
             wv.getSettings().setJavaScriptEnabled(true);
+            wv.getSettings().setAllowContentAccess(false);
             wv.setBackgroundColor(Color.TRANSPARENT);
             wv.setOverScrollMode(View.OVER_SCROLL_NEVER);
+            // external links (Telegram, GitHub …) open in the browser, not inside the dialog
+            wv.setWebViewClient(new WebViewClient() {
+                @Override
+                public boolean shouldOverrideUrlLoading(WebView view, String url) {
+                    if (url != null && url.startsWith("file:///android_asset/")) return false;
+                    try {
+                        a.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+                    } catch (Throwable e) {
+                        Ui.toast(a, "No app can open this link");
+                    }
+                    return true;
+                }
+            });
             wv.loadUrl("file:///android_asset/" + assetFile);
             webWrap.addView(wv, new FrameLayout.LayoutParams(-1, -1));
+            // free the WebView (it leaked its Activity before)
+            d.setOnDismissListener(new android.content.DialogInterface.OnDismissListener() {
+                @Override public void onDismiss(android.content.DialogInterface di) {
+                    webWrap.removeAllViews();
+                    wv.destroy();
+                }
+            });
         } else {
             TextView tv = Ui.text(a, assetFile + " not found in app assets.", 13, t.textSub, false);
             int p2 = Ui.dp(16);
@@ -90,8 +114,10 @@ public final class Dialogs {
             w.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             WindowManager.LayoutParams wl = w.getAttributes();
             wl.width = screenW - Ui.dp(30);
+            wl.height = WindowManager.LayoutParams.WRAP_CONTENT;
             w.setAttributes(wl);
         }
+        if (!Ui.alive(a)) return;
         d.show();
         Ui.popIn(root, 40);
     }

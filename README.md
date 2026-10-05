@@ -1,15 +1,15 @@
 
 <div align="center">
 
-# ☕ Java2Dex v2.0
+# ☕ Java2Dex v2.1
 
 **Convert Java to DEX, Write Code, Explore Smali — All On Your Phone.**
 
 *The Ultimate Mobile Toolkit for Android Modders*
 
-<img src="app/src/main/res/drawable/logo.png" width="120" alt="Java2Dex Logo">
+<img src="app/src/main/res/drawable-nodpi/logo.png" width="120" alt="Java2Dex Logo">
 
-![Version](https://img.shields.io/badge/Version-2.0_%22Code_IDE%22-16A34A?style=for-the-badge&logo=android&logoColor=white)
+![Version](https://img.shields.io/badge/Version-2.1_%22Code_IDE%22-16A34A?style=for-the-badge&logo=android&logoColor=white)
 ![Platform](https://img.shields.io/badge/Android-8.0%2B-3DDC84?style=for-the-badge&logo=android&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-15803D?style=for-the-badge)
 ![CI](https://img.shields.io/badge/Build-GitHub_Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)
@@ -41,6 +41,34 @@ then explore the result in the **DEX Explorer** — no PC, no Android Studio, 10
 | Compile | Eclipse ECJ 4.6.1 | On device |
 | DEX | Google D8 (R8 2.1.75) | On device |
 | Disassemble | dexlib2 2.5.2 | On device |
+
+## 🆕 What's New in v2.1
+
+**Fixes**
+- DEX Explorer crashed with a `NullPointerException` on open — fixed
+- Multi-dex: only `classes.dex` was saved; `classes2.dex …` were silently dropped — all are now saved, listed, shared and browsed
+- Smali viewer decoded several instruction formats wrongly (`cmp-*`, `if-*z`, 5-register `invoke`, `*-lit8` operand order, `filled-new-array`, `const-wide/high16`) — verified against baksmali
+- "Reset Java2Dex Folder" recursively deleted the output folder (dangerous with a custom folder) — replaced by a safe **Clean DEX Outputs**
+- Two projects with the same name shared one output folder and overwrote each other — names are now made unique
+- Deleting any file in the IDE could blank the editor — fixed
+- Dark mode: build overlay, error text and dialogs were unreadable/white — fixed
+- WebView leak + external links opening inside the dialog — fixed
+- `android.jar` extraction is now atomic and re-done after app updates (a killed first run could leave a corrupt jar)
+- Re-share created duplicate `classes (1).dex` files — old export is replaced
+- Library jars are now visible to D8 (no more "missing class" failures); optional **bundle libs into DEX**
+- Notes / images in a project can no longer break the compile (only `.java` is compiled)
+- Thread-safety in the project store and smali generator; large `largeHeap` for ECJ/D8
+
+**Code IDE**
+- Line numbers, auto-indent, symbol bar, real multi-step **undo / redo**, auto-save
+- **Find & replace**, go-to-line, tap-to-jump build errors, package line auto-added to new files
+- Indented file tree, folder-aware "new file", rename/move, duplicate, `.jar` import goes to libs
+
+**DEX Explorer / Smali**
+- Methods tab, class kind + member counts, colored smali, share smali
+- Smali now uses `p0` registers, `:labels`, `.packed-switch`, `.sparse-switch`, `.array-data` like real smali
+
+**Settings**: min API level (21–30), bundle libraries, clear build cache. App logo shrunk 1.5 MB → 267 KB.
 
 ## 🚀 What's New in v2.0
 
@@ -139,7 +167,7 @@ Or just push — **GitHub Actions** builds the APK automatically on every commit
 
 | File | Path | Purpose |
 |---|---|---|
-| `logo.png` | `app/src/main/res/drawable/` | App icon & in-app logo |
+| `logo.png` | `app/src/main/res/drawable-nodpi/` | App icon & in-app logo |
 | `developer.html` | `app/src/main/assets/` | Developer profile page |
 | `android.jar` | auto-bundled by CI | Compile against Android APIs |
 
@@ -157,7 +185,7 @@ Or just push — **GitHub Actions** builds the APK automatically on every commit
 
 - [ ] APK packaging from DEX
 - [ ] Smali → DEX re-assembly
-- [ ] Multi-dex output
+- [x] Multi-dex output (v2.1)
 - [ ] Code auto-complete
 - [ ] Git integration
 

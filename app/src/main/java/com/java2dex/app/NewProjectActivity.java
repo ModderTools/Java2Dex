@@ -191,19 +191,32 @@ public class NewProjectActivity extends Activity {
         stage.addView(resultBox, new FrameLayout.LayoutParams(-1, -1));
     }
 
+    @Override
+    public void onBackPressed() {
+        if (progressBox != null && progressBox.getVisibility() == View.VISIBLE) {
+            Ui.toast(this, "Conversion in progress…");
+            return;
+        }
+        if (resultBox != null && resultBox.getVisibility() == View.VISIBLE
+                && formScroll.getVisibility() != View.VISIBLE && currentProject != null
+                && currentProject.status == Project.ST_ERROR) {
+            resetForm();
+            return;
+        }
+        super.onBackPressed();
+    }
+
     private void openInIde() {
         String name = nameInput.getText().toString().trim();
         if (name.length() == 0) { Ui.shake(nameInput); Ui.toast(this, "Enter a project name first"); return; }
         Project p = new Project();
         p.id = String.valueOf(System.currentTimeMillis());
-        p.name = name;
+        p.name = Project.uniqueName(this, name);
         p.createdAt = System.currentTimeMillis();
         p.srcDir(this).mkdirs();
         if (useSample) {
-            try {
-                FileWriter w = new FileWriter(new File(p.srcDir(this), "HelloMod.java"));
-                w.write(SAMPLE_JAVA); w.close();
-            } catch (Exception ignored) { }
+            try { Ui.writeText(new File(p.srcDir(this), "HelloMod.java"), SAMPLE_JAVA); }
+            catch (Exception ignored) { }
         }
         Project.upsert(this, p);
         Intent i = new Intent(this, IdeActivity.class);
@@ -244,9 +257,10 @@ public class NewProjectActivity extends Activity {
         String name = nameInput.getText().toString().trim();
         if (name.length() == 0) { Ui.shake(nameInput); Ui.toast(this, "Enter a project name"); return; }
         if (sources.isEmpty() && !useSample) { Ui.shake(srcCard); Ui.toast(this, "Select .java files or a .zip"); return; }
+        if (Converter.isRunning()) { Ui.toast(this, "A conversion is already running"); return; }
         Project p = new Project();
         p.id = String.valueOf(System.currentTimeMillis());
-        p.name = name;
+        p.name = Project.uniqueName(this, name);
         p.createdAt = System.currentTimeMillis();
         Project.upsert(this, p);
         currentProject = p;
@@ -266,7 +280,7 @@ public class NewProjectActivity extends Activity {
         Converter.convert(this, p, new Converter.Callback() {
             @Override public void onStep(String s) { statusText.setText(s); }
             @Override public void onDone(boolean ok, String log) {
-                saveLog(p, log);
+                if (!Ui.alive(NewProjectActivity.this)) return;
                 if (ok) showSuccess(p); else showError(log);
             }
         });
@@ -277,18 +291,27 @@ public class NewProjectActivity extends Activity {
             File src = p.srcDir(this);
             src.mkdirs();
             if (useSample) {
-                FileWriter w = new FileWriter(new File(src, "HelloMod.java"));
-                w.write(SAMPLE_JAVA); w.close();
+                Ui.writeText(new File(src, "HelloMod.java"), SAMPLE_JAVA);
             }
             int i = 0;
+            File libDir0 = p.libsDir(this);
             for (Uri u : sources) {
                 String n = displayName(u);
-                if (n == null || n.length() == 0) n = "file_" + (i++);
-                File dst = new File(src, sanitize(n));
-                copyStream(getContentResolver().openInputStream(u), new FileOutputStream(dst));
-                if (n.toLowerCase().endsWith(".zip")) {
-                    Ui.unzipJava(dst, src);
-                    dst.delete();
+                if (n == null || n.length() == 0) n = "file_" + (i++) + ".java";
+                String low = n.toLowerCase();
+                InputStream in = getContentResolver().openInputStream(u);
+                if (in == null) continue;
+                if (low.endsWith(".jar")) {          // a jar picked as "source" is a library
+                    libDir0.mkdirs();
+                    copyStream(in, new FileOutputStream(new File(libDir0, sanitize(n))));
+                } else if (low.endsWith(".zip")) {
+                    File dst = new File(getCacheDir(), "stage_" + System.currentTimeMillis() + ".zip");
+                    copyStream(in, new FileOutputStream(dst));
+                    try { Ui.unzipJava(dst, src); } finally { dst.delete(); }
+                } else if (low.endsWith(".java")) {
+                    copyStream(in, new FileOutputStream(new File(src, sanitize(n))));
+                } else {
+                    in.close();   // notes, images … are not Java sources
                 }
             }
             if (!libs.isEmpty()) {
@@ -344,17 +367,6 @@ public class NewProjectActivity extends Activity {
         out.flush(); out.close(); in.close();
     }
 
-    private void saveLog(final Project p, final String log) {
-        new Thread(() -> {
-            try {
-                File f = p.logFile(this);
-                f.getParentFile().mkdirs();
-                FileWriter w = new FileWriter(f);
-                w.write(log); w.close();
-            } catch (Exception ignored) { }
-        }).start();
-    }
-
     private LinearLayout.LayoutParams rowWeight() {
         return new LinearLayout.LayoutParams(0, -2, 1f);
     }
@@ -396,7 +408,9 @@ public class NewProjectActivity extends Activity {
         t1p.topMargin = Ui.dp(18);
         col.addView(t1, t1p);
 
-        TextView t2 = Ui.text(this, "Saved to /storage/emulated/0/Java2Dex/", 13, t.textSub, false);
+        TextView t2 = Ui.text(this, "Saved to " + Project.java2dexRootNoCreate(this).getAbsolutePath() + "/",
+                13, t.textSub, false);
+        t2.setPadding(Ui.dp(8), 0, Ui.dp(8), 0);
         t2.setGravity(Gravity.CENTER);
         col.addView(t2);
 
@@ -405,7 +419,13 @@ public class NewProjectActivity extends Activity {
         pathCard.setBackground(Ui.outline(t.accentSoft, t.accent, 12, 1, this));
         int pd2 = Ui.dp(12);
         pathCard.setPadding(pd2, pd2, pd2, pd2);
-        TextView pt = Ui.text(this, p.publicDexFile(this).getAbsolutePath(), 12, t.accentDark, false);
+        List<File> made = p.publicDexFiles(this);
+        StringBuilder pathTxt = new StringBuilder();
+        for (File mf : made) {
+            if (pathTxt.length() > 0) pathTxt.append('\n');
+            pathTxt.append(mf.getAbsolutePath()).append("  (").append(Ui.size(mf.length())).append(')');
+        }
+        TextView pt = Ui.text(this, pathTxt.toString(), 12, t.accentDark, false);
         pt.setTypeface(Typeface.MONOSPACE);
         pt.setTextIsSelectable(true);
         pathCard.addView(pt);
@@ -442,11 +462,8 @@ public class NewProjectActivity extends Activity {
             i.putExtra("id", p.id);
             startActivity(i);
         });
-        shareBtn.setOnClickListener(v -> {
-            File f = p.publicDexFile(this);
-            if (f.exists()) Ui.shareFile(this, f, p.safeName() + "_classes.dex");
-            else Ui.toast(this, "File missing — try again");
-        });
+        shareBtn.setOnClickListener(v ->
+                Ui.shareFiles(this, p.publicDexFiles(this), p.safeName()));
         doneBtn.setOnClickListener(v -> finish());
     }
 
@@ -482,7 +499,7 @@ public class NewProjectActivity extends Activity {
 
         ScrollView logScroll = new ScrollView(this);
         logScroll.setBackground(Ui.fill(t.chipBg, 12, this));
-        TextView logTv = Ui.text(this, log, 11.5f, 0xFF7F1D1D, false);
+        TextView logTv = Ui.text(this, log, 11.5f, t.danger, false);
         logTv.setTypeface(Typeface.MONOSPACE);
         logTv.setTextIsSelectable(true);
         int pd3 = Ui.dp(12);

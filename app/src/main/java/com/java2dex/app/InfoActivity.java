@@ -88,7 +88,7 @@ public class InfoActivity extends Activity {
         hero.addView(name);
         Ui.riseIn(name, 250);
 
-        TextView ver = Ui.text(this, "Version 2.0 • Code IDE", 12.5f, 0xCCFFFFFF, false);
+        TextView ver = Ui.text(this, "Version " + Ui.VERSION + " • Code IDE", 12.5f, 0xCCFFFFFF, false);
         ver.setGravity(Gravity.CENTER);
         hero.addView(ver);
         Ui.riseIn(ver, 320);
@@ -111,7 +111,7 @@ public class InfoActivity extends Activity {
         LinearLayout stats = card();
         LinearLayout statRow = new LinearLayout(this);
         statRow.setOrientation(LinearLayout.HORIZONTAL);
-        statRow.addView(stat("25+", "Features"), w());
+        statRow.addView(stat("40+", "Features"), w());
         statRow.addView(stat("100%", "Offline"), w());
         statRow.addView(stat("3", "Build Stages"), w());
         stats.addView(statRow, new LinearLayout.LayoutParams(-1, -2));
@@ -138,8 +138,11 @@ public class InfoActivity extends Activity {
         feat.addView(Ui.text(this, "FEATURE HIGHLIGHTS", 12, t.textSub, true));
         addFeature(feat, "One-tap Java to DEX pipeline");
         addFeature(feat, "AIDE-style Code IDE with file explorer");
+        addFeature(feat, "Line numbers, auto-indent, symbol bar, undo / redo");
+        addFeature(feat, "Find & replace, go-to-line, tap-to-jump build errors");
         addFeature(feat, "Syntax highlighting and snippets");
-        addFeature(feat, "DEX Explorer with real smali output");
+        addFeature(feat, "DEX Explorer: classes, methods, strings, real smali");
+        addFeature(feat, "Multi-dex output and library bundling");
         addFeature(feat, "Save all smali files");
         addFeature(feat, "Auto-save to Java2Dex folder");
         addFeature(feat, "Dark and light themes");

@@ -3,6 +3,8 @@ package com.java2dex.app;
 import android.animation.ObjectAnimator;
 import android.animation.ValueAnimator;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.database.Cursor;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.ContentValues;
@@ -39,6 +41,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.nio.charset.Charset;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
@@ -52,6 +57,8 @@ public class Ui {
     public static final int RED         = 0xFFDC2626;
     public static final int RED_LIGHT   = 0xFFFEE2E2;
     public static final int WHITE       = 0xFFFFFFFF;
+
+    public static final String VERSION = "2.1";
 
     private static Context appContext;
 
@@ -190,47 +197,167 @@ public class Ui {
         a.startActivity(Intent.createChooser(s, "Share"));
     }
 
+    // ---------------------------------------------------------------- dialogs
+
+    /** AlertDialog builder that follows the in-app dark / light theme */
+    public static AlertDialog.Builder dialog(Context c) {
+        return new AlertDialog.Builder(c, Prefs.dark(c)
+                ? AlertDialog.THEME_DEVICE_DEFAULT_DARK
+                : AlertDialog.THEME_DEVICE_DEFAULT_LIGHT);
+    }
+
+    /** false once the activity is finishing — never show a dialog on a dead window */
+    public static boolean alive(Activity a) {
+        if (a == null || a.isFinishing()) return false;
+        return Build.VERSION.SDK_INT < 17 || !a.isDestroyed();
+    }
+
+    // ---------------------------------------------------------------- file io (UTF-8, no leaks)
+
+    private static final Charset UTF8 = Charset.forName("UTF-8");
+
+    public static String readText(File f) throws IOException {
+        InputStream in = new FileInputStream(f);
+        try {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream((int) Math.max(32, f.length()));
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            return new String(bo.toByteArray(), UTF8);
+        } finally {
+            try { in.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    public static void writeText(File f, String text) throws IOException {
+        File parent = f.getParentFile();
+        if (parent != null) parent.mkdirs();
+        FileOutputStream out = new FileOutputStream(f);
+        try {
+            out.write(text.getBytes(UTF8));
+            out.flush();
+        } finally {
+            try { out.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    public static void copyStream(InputStream in, OutputStream out) throws IOException {
+        try {
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+            out.flush();
+        } finally {
+            try { in.close(); } catch (IOException ignored) { }
+            try { out.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    public static void copyFile(File src, File dst) throws IOException {
+        File parent = dst.getParentFile();
+        if (parent != null) parent.mkdirs();
+        copyStream(new FileInputStream(src), new FileOutputStream(dst));
+    }
+
+    // ---------------------------------------------------------------- export / share
+
+    /**
+     * Copies a file into Downloads/Java2Dex. Works on Android 8+ (MediaStore on 10+,
+     * plain file copy below). An older export with the same name is replaced instead
+     * of piling up "name (1).dex" copies. Returns a Uri when MediaStore was used.
+     */
+    public static Uri exportToDownloads(Context c, File file, String name) throws IOException {
+        if (Build.VERSION.SDK_INT >= 29) {
+            String rel = Environment.DIRECTORY_DOWNLOADS + "/Java2Dex";
+            try {
+                Cursor q = c.getContentResolver().query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                        new String[]{MediaStore.MediaColumns._ID},
+                        MediaStore.MediaColumns.DISPLAY_NAME + "=? AND "
+                                + MediaStore.MediaColumns.RELATIVE_PATH + " LIKE ?",
+                        new String[]{name, rel + "%"}, null);
+                if (q != null) {
+                    try {
+                        while (q.moveToNext()) {
+                            Uri old = android.content.ContentUris.withAppendedId(
+                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, q.getLong(0));
+                            try { c.getContentResolver().delete(old, null, null); }
+                            catch (Throwable ignored) { }
+                        }
+                    } finally { q.close(); }
+                }
+            } catch (Throwable ignored) { }
+            ContentValues cv = new ContentValues();
+            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
+            cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
+            cv.put(MediaStore.MediaColumns.RELATIVE_PATH, rel);
+            Uri uri = c.getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+            if (uri == null) throw new IOException("MediaStore insert failed");
+            OutputStream out = c.getContentResolver().openOutputStream(uri);
+            if (out == null) throw new IOException("Cannot open output stream");
+            copyStream(new FileInputStream(file), out);
+            return uri;
+        }
+        File dir = new File(Environment.getExternalStoragePublicDirectory(
+                Environment.DIRECTORY_DOWNLOADS), "Java2Dex");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("Cannot create " + dir.getAbsolutePath()
+                    + " — grant storage permission first");
+        }
+        copyFile(file, new File(dir, name));
+        return null;
+    }
+
     public static void shareFile(Activity act, File file, String name) {
         if (act == null || file == null || !file.exists()) {
             if (act != null) toast(act, "File not found — convert first");
             return;
         }
-        if (Build.VERSION.SDK_INT >= 29) {
-            try {
-                ContentValues cv = new ContentValues();
-                cv.put(MediaStore.MediaColumns.DISPLAY_NAME, name);
-                cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
-                cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                        Environment.DIRECTORY_DOWNLOADS + "/Java2Dex");
-                Uri uri = act.getContentResolver()
-                        .insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-                if (uri == null) throw new IOException("MediaStore insert failed");
-                InputStream in = new FileInputStream(file);
-                OutputStream out = act.getContentResolver().openOutputStream(uri);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                out.flush();
-                out.close();
-                in.close();
-                Intent s = new Intent(Intent.ACTION_SEND);
-                s.setType("application/octet-stream");
-                s.putExtra(Intent.EXTRA_STREAM, uri);
-                s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-                act.startActivity(Intent.createChooser(s, "Share DEX file"));
-                return;
-            } catch (Exception ignored) { }
-        }
         try {
-            java.lang.reflect.Method m = StrictMode.class
-                    .getMethod("disableDeathOnFileUriExposure");
-            m.invoke(null);
-        } catch (Exception ignored) { }
-        Intent s = new Intent(Intent.ACTION_SEND);
-        s.setType("application/octet-stream");
-        s.putExtra(Intent.EXTRA_STREAM, Uri.fromFile(file));
-        s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        act.startActivity(Intent.createChooser(s, "Share DEX file"));
+            Uri uri = exportToDownloads(act, file, name);
+            if (uri == null) {
+                // Android 8/9: the exported copy is a plain file
+                try {
+                    StrictMode.class.getMethod("disableDeathOnFileUriExposure").invoke(null);
+                } catch (Exception ignored) { }
+                uri = Uri.fromFile(new File(new File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "Java2Dex"), name));
+            }
+            Intent s = new Intent(Intent.ACTION_SEND);
+            s.setType("application/octet-stream");
+            s.putExtra(Intent.EXTRA_STREAM, uri);
+            s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            act.startActivity(Intent.createChooser(s, "Share DEX file"));
+        } catch (Exception e) {
+            toast(act, "Share failed: " + e.getMessage());
+        }
+    }
+
+    /** exports every file to Downloads/Java2Dex and opens the share sheet for all of them */
+    public static void shareFiles(Activity act, List<File> files, String prefix) {
+        if (act == null) return;
+        if (files == null || files.isEmpty()) { toast(act, "No DEX yet — convert first"); return; }
+        if (files.size() == 1) { shareFile(act, files.get(0), prefix + "_" + files.get(0).getName()); return; }
+        try {
+            ArrayList<Uri> uris = new ArrayList<Uri>();
+            for (File f : files) {
+                String name = prefix + "_" + f.getName();
+                Uri u = exportToDownloads(act, f, name);
+                if (u == null) {
+                    try { StrictMode.class.getMethod("disableDeathOnFileUriExposure").invoke(null); }
+                    catch (Exception ignored) { }
+                    u = Uri.fromFile(new File(new File(Environment.getExternalStoragePublicDirectory(
+                            Environment.DIRECTORY_DOWNLOADS), "Java2Dex"), name));
+                }
+                uris.add(u);
+            }
+            Intent s = new Intent(Intent.ACTION_SEND_MULTIPLE);
+            s.setType("application/octet-stream");
+            s.putParcelableArrayListExtra(Intent.EXTRA_STREAM, uris);
+            s.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            act.startActivity(Intent.createChooser(s, "Share DEX files"));
+        } catch (Exception e) {
+            toast(act, "Share failed: " + e.getMessage());
+        }
     }
 
     /** extracts only .java files from a zip (zip-slip protected) */

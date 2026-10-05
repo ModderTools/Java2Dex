@@ -12,7 +12,9 @@ import android.os.Bundle;
 import android.os.Handler;
 import android.provider.OpenableColumns;
 import android.text.Editable;
+import android.text.InputFilter;
 import android.text.Spannable;
+import android.text.Spanned;
 import android.text.TextWatcher;
 import android.text.style.ForegroundColorSpan;
 import android.view.Gravity;
@@ -28,51 +30,65 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.FileWriter;
 import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
-/** AIDE-style code IDE: ☰ full-screen explorer, white code sheet, dark chrome */
+/** AIDE-style code IDE: ☰ full-screen explorer, code sheet with line numbers, symbol bar */
 public class IdeActivity extends Activity {
 
     private static final int REQ_IMPORT = 51;
+    private static final int MAX_HIGHLIGHT = 120000;
+    private static final int MAX_OPEN_BYTES = 2 * 1024 * 1024;
 
-    private static final String[] KEYWORDS = {
+    private static final Set<String> KEYWORDS = new HashSet<>(Arrays.asList(
             "abstract","assert","boolean","break","byte","case","catch","char","class","const",
             "continue","default","do","double","else","enum","extends","final","finally","float",
             "for","goto","if","implements","import","instanceof","int","interface","long","native",
             "new","package","private","protected","public","return","short","static","strictfp",
             "super","switch","synchronized","this","throw","throws","transient","try","void",
-            "volatile","while","true","false","null","var","record","yield"
-    };
+            "volatile","while","true","false","null","var","record","yield"));
+
+    private static class Hist {
+        final ArrayList<String> undo = new ArrayList<>();
+        final ArrayList<String> redo = new ArrayList<>();
+        String last;
+    }
 
     private Theme t;
     private Project p;
     private ListView filesList;
-    private EditText editor;
+    private CodeEditText editor;
     private TextView fileTitle, metaLabel, explorerSub;
     private LinearLayout explorer, overlay;
     private TextView overlayStatus;
 
     private final List<Object[]> entries = new ArrayList<>();
-    private final Map<String, String> undoMap = new HashMap<>();
+    private final Map<String, Hist> hist = new HashMap<>();
     private String currentRel = null;
+    private String selectedDir = "";          // folder chosen in the explorer ("" = root)
     private final Handler hl = new Handler();
-    private Runnable hlRun;
+    private Runnable hlRun, snapRun, saveRun;
     private boolean wrapOn = true;
+    private boolean programmatic = false;     // true while we set editor text ourselves
+    private boolean dirty = false;
+    private String lastFind = "", lastRepl = "";
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         t = Theme.get(this);
         getWindow().setStatusBarColor(Ui.GREEN_DEEP);
+        getWindow().setNavigationBarColor(0xFF0B1F12);
         String id = getIntent() != null ? getIntent().getStringExtra("id") : null;
         p = id != null ? Project.byId(this, id) : null;
         if (p == null) { finish(); return; }
@@ -85,22 +101,29 @@ public class IdeActivity extends Activity {
     }
 
     private void ensureDefaultFile() {
-        File[] fs = p.srcDir(this).listFiles();
-        boolean hasJava = false;
-        if (fs != null) for (File f : fs) {
-            if (f.getName().toLowerCase().endsWith(".java")) { hasJava = true; break; }
-        }
-        if (!hasJava) {
+        List<File> found = new ArrayList<>();
+        findJava(p.srcDir(this), found);
+        if (found.isEmpty()) {
             try {
-                File f = new File(p.srcDir(this), "Main.java");
-                FileWriter w = new FileWriter(f);
-                w.write("public class Main {\n    public static void main(String[] args) {\n        \n    }\n}\n");
-                w.close();
+                Ui.writeText(new File(p.srcDir(this), "Main.java"),
+                        "public class Main {\n    public static void main(String[] args) {\n        \n    }\n}\n");
             } catch (Throwable ignored) { }
         }
     }
 
+    private void findJava(File dir, List<File> out) {
+        File[] fs = dir.listFiles();
+        if (fs == null) return;
+        for (File f : fs) {
+            if (f.isDirectory()) findJava(f, out);
+            else if (f.getName().toLowerCase().endsWith(".java")) out.add(f);
+        }
+    }
+
+    // ================================================================ UI
+
     private void buildUi() {
+        boolean dark = Prefs.dark(this);
         FrameLayout base = new FrameLayout(this);
         base.setBackgroundColor(t.bg);
         setContentView(base);
@@ -109,7 +132,7 @@ public class IdeActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         base.addView(root, new FrameLayout.LayoutParams(-1, -1));
 
-        // ================= header (dark) =================
+        // ---------- header ----------
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.VERTICAL);
         header.setBackground(Ui.gradient(Ui.GREEN_DEEP, Ui.GREEN, 0, this));
@@ -135,26 +158,34 @@ public class IdeActivity extends Activity {
         hcol.addView(Ui.text(this, p.name + "  •  tap ☰ for files", 10.5f, 0xB3FFFFFF, false));
         hrow.addView(hcol, hclp);
 
-        TextView saveTop = Ui.text(this, "💾", 17, Color.WHITE, false);
-        saveTop.setGravity(Gravity.CENTER);
-        saveTop.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
-        saveTop.setPadding(Ui.dp(13), Ui.dp(7), Ui.dp(13), Ui.dp(7));
-        saveTop.setOnClickListener(v -> {
-            saveCurrent();
-            Ui.toast(this, "Saved ✔");
-        });
-        hrow.addView(saveTop, new LinearLayout.LayoutParams(-2, -2));
+        hrow.addView(headBtn("💾", v -> {
+            if (saveCurrent()) Ui.toast(this, "Saved ✔");
+        }));
+        // prominent Convert / Run button: solid white pill with a green play icon
+        TextView play = Ui.text(this, "▶", 19, Ui.GREEN_DEEP, true);
+        play.setGravity(Gravity.CENTER);
+        play.setBackground(Ui.ripple(this, Ui.fill(Color.WHITE, 22, this)));
+        play.setPadding(Ui.dp(16), Ui.dp(7), Ui.dp(16), Ui.dp(7));
+        play.setElevation(Ui.dp(3));
+        play.setContentDescription("Convert to DEX");
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-2, -2);
+        plp.leftMargin = Ui.dp(10);
+        play.setLayoutParams(plp);
+        play.setOnClickListener(v -> convert());
+        Ui.pressScale(play, 0.9f);
+        hrow.addView(play);
 
         header.addView(hrow, new LinearLayout.LayoutParams(-1, -2));
         root.addView(header, new LinearLayout.LayoutParams(-1, -2));
 
-        // ================= white code sheet =================
+        // ---------- code sheet ----------
         FrameLayout sheet = new FrameLayout(this);
-        sheet.setBackground(Ui.outline(
-                Prefs.dark(this) ? t.card : Color.WHITE, t.cardStroke, 16, 1, this));
+        sheet.setBackground(Ui.outline(dark ? t.card : Color.WHITE, t.cardStroke, 16, 1, this));
         sheet.setElevation(Ui.dp(3));
+        sheet.setClipToOutline(true);
 
-        editor = new EditText(this);
+        editor = new CodeEditText(this, t.textSub,
+                dark ? 0xFF0F1A2E : 0xFFF1F5F9, t.cardStroke);
         editor.setTypeface(Typeface.MONOSPACE);
         editor.setTextSize(Prefs.fontSize(this));
         editor.setTextColor(t.text);
@@ -166,12 +197,17 @@ public class IdeActivity extends Activity {
                 | android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         editor.setHorizontallyScrolling(!wrapOn);
         editor.setGravity(Gravity.TOP);
-        int ep = Ui.dp(14);
-        editor.setPadding(ep, ep, ep, ep);
+        editor.setCodePadding(Ui.dp(12), Ui.dp(12), Ui.dp(12));
+        editor.setFilters(new InputFilter[]{ indentFilter });
         editor.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
             @Override public void afterTextChanged(Editable s) {
+                if (!programmatic) {
+                    setDirty(true);
+                    scheduleSnapshot();
+                    scheduleAutosave();
+                }
                 scheduleHighlight();
                 updateMeta();
             }
@@ -182,7 +218,7 @@ public class IdeActivity extends Activity {
         sheetLp.setMargins(Ui.dp(10), Ui.dp(10), Ui.dp(10), Ui.dp(6));
         root.addView(sheet, sheetLp);
 
-        // ================= meta strip (dark) =================
+        // ---------- meta strip ----------
         metaLabel = Ui.text(this, "Ln 1, Col 1", 10, t.textSub, false);
         metaLabel.setSingleLine(true);
         metaLabel.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
@@ -192,32 +228,45 @@ public class IdeActivity extends Activity {
         metaLp.setMargins(Ui.dp(10), 0, Ui.dp(10), Ui.dp(6));
         root.addView(metaLabel, metaLp);
 
-        // ================= toolbar (dark strip) =================
+        // ---------- symbol bar + toolbar ----------
         LinearLayout toolStrip = new LinearLayout(this);
         toolStrip.setOrientation(LinearLayout.VERTICAL);
         toolStrip.setBackgroundColor(0xFF0B1F12);
 
+        HorizontalScrollView sym = new HorizontalScrollView(this);
+        sym.setHorizontalScrollBarEnabled(false);
+        LinearLayout symBar = new LinearLayout(this);
+        symBar.setPadding(Ui.dp(8), Ui.dp(7), Ui.dp(8), Ui.dp(2));
+        sym.addView(symBar, new HorizontalScrollView.LayoutParams(-2, -2));
+        symBar.addView(symBtn("⇥", "    ", 0));
+        symBar.addView(symBtn("{}", "{}", 1));
+        symBar.addView(symBtn("()", "()", 1));
+        symBar.addView(symBtn("[]", "[]", 1));
+        symBar.addView(symBtn("\"\"", "\"\"", 1));
+        symBar.addView(symBtn(";", ";", 0));
+        String[] singles = {"{", "}", "(", ")", "[", "]", "=", ".", ",", "<", ">", "!", "&", "|",
+                "+", "-", "*", "/", "_", ":", "?", "'", "\\", "@", "#", "%"};
+        for (String s : singles) symBar.addView(symBtn(s, s, 0));
+        toolStrip.addView(sym, new LinearLayout.LayoutParams(-1, -2));
+
         HorizontalScrollView hs = new HorizontalScrollView(this);
         hs.setHorizontalScrollBarEnabled(false);
-        hs.setFillViewport(true);
         LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.setPadding(Ui.dp(8), Ui.dp(7), Ui.dp(8), Ui.dp(9));
+        bar.setPadding(Ui.dp(8), Ui.dp(5), Ui.dp(8), Ui.dp(9));
         hs.addView(bar, new HorizontalScrollView.LayoutParams(-2, -2));
-
         bar.addView(toolBtn("↩ Undo", v -> undo()));
+        bar.addView(toolBtn("↪ Redo", v -> redo()));
         bar.addView(toolBtn("🔍 Find", v -> findDialog()));
-        bar.addView(toolBtn("⇥ Tab", v -> insertTab()));
+        bar.addView(toolBtn("# Line", v -> gotoDialog()));
         bar.addView(toolBtn("📋 Snip", v -> snippetsDialog()));
         bar.addView(toolBtn("A+", v -> changeFont(2)));
         bar.addView(toolBtn("A-", v -> changeFont(-2)));
         bar.addView(toolBtn("📐 Wrap", v -> toggleWrap()));
         bar.addView(toolBtn("⚡ Convert", v -> convert()));
-
         toolStrip.addView(hs, new LinearLayout.LayoutParams(-1, -2));
         root.addView(toolStrip, new LinearLayout.LayoutParams(-1, -2));
 
-        // ================= full-screen explorer overlay =================
+        // ---------- explorer overlay ----------
         explorer = new LinearLayout(this);
         explorer.setOrientation(LinearLayout.VERTICAL);
         explorer.setBackgroundColor(t.bg);
@@ -269,14 +318,13 @@ public class IdeActivity extends Activity {
             return true;
         });
         explorer.addView(filesList, new LinearLayout.LayoutParams(-1, 0, 1f));
-
         base.addView(explorer, new FrameLayout.LayoutParams(-1, -1));
 
-        // ================= convert overlay =================
+        // ---------- convert overlay ----------
         overlay = new LinearLayout(this);
         overlay.setOrientation(LinearLayout.VERTICAL);
         overlay.setGravity(Gravity.CENTER);
-        overlay.setBackgroundColor(Prefs.dark(this) ? 0xF0141E31 : 0xF0FFFFFF);
+        overlay.setBackgroundColor(dark ? 0xF0141E31 : 0xF0FFFFFF);
         overlay.setClickable(true);
         overlay.setVisibility(View.GONE);
         ProgressBar pb = new ProgressBar(this);
@@ -287,6 +335,33 @@ public class IdeActivity extends Activity {
         osp.topMargin = Ui.dp(14);
         overlay.addView(overlayStatus, osp);
         base.addView(overlay, new FrameLayout.LayoutParams(-1, -1));
+    }
+
+    private TextView headBtn(String glyph, View.OnClickListener l) {
+        TextView b = Ui.text(this, glyph, 17, Color.WHITE, false);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Ui.ripple(this, Ui.fill(0x33FFFFFF, 12, this)));
+        b.setPadding(Ui.dp(13), Ui.dp(7), Ui.dp(13), Ui.dp(7));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.leftMargin = Ui.dp(8);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(l);
+        Ui.pressScale(b, 0.92f);
+        return b;
+    }
+
+    private TextView symBtn(String label, final String insert, final int caretBack) {
+        TextView b = Ui.text(this, label, 14, Color.WHITE, true);
+        b.setTypeface(Typeface.MONOSPACE, Typeface.BOLD);
+        b.setGravity(Gravity.CENTER);
+        b.setBackground(Ui.ripple(this, Ui.fill(0x1AFFFFFF, 8, this)));
+        b.setPadding(Ui.dp(12), Ui.dp(6), Ui.dp(12), Ui.dp(6));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-2, -2);
+        lp.rightMargin = Ui.dp(6);
+        b.setLayoutParams(lp);
+        b.setOnClickListener(v -> insertAtCaret(insert, caretBack));
+        Ui.pressScale(b, 0.9f);
+        return b;
     }
 
     private TextView toolBtn(String label, View.OnClickListener l) {
@@ -328,7 +403,17 @@ public class IdeActivity extends Activity {
         }
     }
 
-    // ================= files =================
+    @Override
+    public void onBackPressed() {
+        if (explorer != null && explorer.getVisibility() == View.VISIBLE) {
+            toggleExplorer();
+            return;
+        }
+        saveCurrent();
+        super.onBackPressed();
+    }
+
+    // ================================================================ files
 
     private void buildEntries(List<Object[]> out, File dir, String prefix) {
         File[] fs = dir.listFiles();
@@ -356,7 +441,8 @@ public class IdeActivity extends Activity {
         buildEntries(entries, p.srcDir(this), "");
         int files = 0;
         for (Object[] e : entries) if (!(Boolean) e[1]) files++;
-        explorerSub.setText(p.name + "  •  " + files + " file" + (files == 1 ? "" : "s"));
+        explorerSub.setText(p.name + "  •  " + files + " file" + (files == 1 ? "" : "s")
+                + (selectedDir.length() > 0 ? "  •  in " + selectedDir : ""));
         if (filesList != null && filesList.getAdapter() != null) {
             ((BaseAdapter) filesList.getAdapter()).notifyDataSetChanged();
         }
@@ -366,11 +452,29 @@ public class IdeActivity extends Activity {
         return new File(p.srcDir(this), rel);
     }
 
+    /** reject traversal, absolute paths and empty segments */
+    private String cleanRel(String raw) {
+        if (raw == null) return null;
+        String r = raw.trim().replace("\\", "/");
+        while (r.startsWith("/")) r = r.substring(1);
+        while (r.endsWith("/")) r = r.substring(0, r.length() - 1);
+        if (r.length() == 0) return null;
+        for (String seg : r.split("/")) {
+            if (seg.length() == 0 || seg.equals(".") || seg.equals("..")) return null;
+        }
+        return r;
+    }
+
     private void onFileTap(int pos) {
         Object[] e = entries.get(pos);
         boolean isDir = (Boolean) e[1];
         String rel = (String) e[0];
-        if (isDir) return;
+        if (isDir) {
+            String d = rel.substring(0, rel.length() - 1);
+            selectedDir = d.equals(selectedDir) ? "" : d;   // tap again to deselect
+            refreshFiles();
+            return;
+        }
         saveCurrent();
         openFile(rel);
         toggleExplorer();
@@ -386,21 +490,31 @@ public class IdeActivity extends Activity {
         }
     }
 
+    private void setEditorText(String content) {
+        programmatic = true;
+        try {
+            editor.setText(content);
+        } finally {
+            programmatic = false;
+        }
+    }
+
     private void openFile(String rel) {
         try {
-            currentRel = rel;
             File f = fileFor(rel);
-            byte[] data = new byte[(int) f.length()];
-            FileInputStream in = new FileInputStream(f);
-            int read = 0, n;
-            while ((n = in.read(data, read, data.length - read)) > 0) read += n;
-            in.close();
-            String content = new String(data);
-            undoMap.put(rel, content);
-            editor.setText(content);
+            if (f.length() > MAX_OPEN_BYTES) {
+                Ui.toast(this, "File too large to edit on device (> 2 MB)");
+                return;
+            }
+            String content = Ui.readText(f);
+            currentRel = rel;
+            setEditorText(content);
+            Hist h = hist.get(rel);
+            if (h == null) { h = new Hist(); hist.put(rel, h); }
+            h.last = content;
             editor.setTextSize(Prefs.fontSize(this));
-            String fileName = rel.substring(rel.lastIndexOf('/') + 1);
-            fileTitle.setText(fileName);
+            setDirty(false);
+            fileTitle.setText(rel.substring(rel.lastIndexOf('/') + 1));
             scheduleHighlight();
             updateMeta();
         } catch (Throwable e) {
@@ -408,55 +522,80 @@ public class IdeActivity extends Activity {
         }
     }
 
-    private void saveCurrent() {
-        if (currentRel == null) return;
+    /** returns true on success; silent on failure unless it is a manual save */
+    private boolean saveCurrent() {
+        if (currentRel == null) return true;
         try {
-            File f = fileFor(currentRel);
-            f.getParentFile().mkdirs();
-            FileWriter w = new FileWriter(f);
-            w.write(editor.getText().toString());
-            w.close();
-        } catch (Throwable ignored) { }
+            Ui.writeText(fileFor(currentRel), editor.getText().toString());
+            setDirty(false);
+            return true;
+        } catch (Throwable e) {
+            Ui.toast(this, "Save failed: " + e.getMessage());
+            return false;
+        }
     }
 
-    // ================= file ops =================
+    private void setDirty(boolean d) {
+        dirty = d;
+        if (fileTitle != null && currentRel != null) {
+            String name = currentRel.substring(currentRel.lastIndexOf('/') + 1);
+            fileTitle.setText(d ? name + "  ●" : name);
+        }
+    }
+
+    // ================================================================ file ops
 
     private void newFileDialog() {
         final EditText input = pathInput("e.g. com/mod/MyHook.java");
-        new AlertDialog.Builder(this)
+        if (selectedDir.length() > 0) input.setText(selectedDir + "/");
+        input.setSelection(input.getText().length());
+        Ui.dialog(this)
                 .setTitle("New Java file")
-                .setMessage("Use / to create subfolders.\nClass name should match file name.")
+                .setMessage("Use / to create subfolders. A package line is added for you.")
                 .setView(wrapInput(input))
                 .setPositiveButton("Create", (d, w) -> {
-                    String rel = input.getText().toString().trim().replace("\\", "/");
-                    if (rel.length() == 0) return;
-                    if (rel.contains("..")) { Ui.toast(this, "Invalid path"); return; }
+                    String rel = cleanRel(input.getText().toString());
+                    if (rel == null) { Ui.toast(this, "Invalid path"); return; }
                     if (!rel.toLowerCase().endsWith(".java")) rel = rel + ".java";
+                    String file = rel.substring(rel.lastIndexOf('/') + 1);
+                    String cls = file.substring(0, file.length() - 5);
+                    if (!isIdentifier(cls)) { Ui.toast(this, "\"" + cls + "\" is not a valid class name"); return; }
                     File f = fileFor(rel);
                     if (f.exists()) { Ui.toast(this, "File already exists"); return; }
+                    String pkg = rel.contains("/")
+                            ? rel.substring(0, rel.lastIndexOf('/')).replace('/', '.') : "";
                     try {
-                        f.getParentFile().mkdirs();
-                        String cls = rel.substring(rel.lastIndexOf('/') + 1).replace(".java", "");
-                        FileWriter w2 = new FileWriter(f);
-                        w2.write("public class " + cls + " {\n    \n}\n");
-                        w2.close();
-                    } catch (Throwable ignored) { }
+                        Ui.writeText(f, (pkg.length() > 0 ? "package " + pkg + ";\n\n" : "")
+                                + "public class " + cls + " {\n    \n}\n");
+                    } catch (Throwable e) {
+                        Ui.toast(this, "Cannot create file: " + e.getMessage());
+                        return;
+                    }
                     refreshFiles();
                     saveCurrent();
                     openFile(rel);
+                    toggleExplorer();
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
+    private static boolean isIdentifier(String s) {
+        if (s == null || s.length() == 0 || !Character.isJavaIdentifierStart(s.charAt(0))) return false;
+        for (int i = 1; i < s.length(); i++) if (!Character.isJavaIdentifierPart(s.charAt(i))) return false;
+        return !KEYWORDS.contains(s);
+    }
+
     private void newFolderDialog() {
         final EditText input = pathInput("e.g. com/mod/utils");
-        new AlertDialog.Builder(this)
+        if (selectedDir.length() > 0) input.setText(selectedDir + "/");
+        input.setSelection(input.getText().length());
+        Ui.dialog(this)
                 .setTitle("New folder")
                 .setView(wrapInput(input))
                 .setPositiveButton("Create", (d, w) -> {
-                    String rel = input.getText().toString().trim().replace("\\", "/");
-                    if (rel.length() == 0 || rel.contains("..")) return;
+                    String rel = cleanRel(input.getText().toString());
+                    if (rel == null) { Ui.toast(this, "Invalid path"); return; }
                     fileFor(rel).mkdirs();
                     refreshFiles();
                     Ui.toast(this, "Folder created ✔");
@@ -470,7 +609,7 @@ public class IdeActivity extends Activity {
         i.setType("*/*");
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
-        startActivityForResult(Intent.createChooser(i, "Import .java files or a .zip"), REQ_IMPORT);
+        startActivityForResult(Intent.createChooser(i, "Import .java, .zip or library .jar"), REQ_IMPORT);
     }
 
     @Override
@@ -483,29 +622,44 @@ public class IdeActivity extends Activity {
                 uris.add(data.getClipData().getItemAt(i).getUri());
             }
         } else if (data.getData() != null) uris.add(data.getData());
-        int count = 0;
+
+        int src = 0, libs = 0, skipped = 0;
         for (Uri u : uris) {
             try {
                 String name = uriName(u);
                 if (name == null) name = "import_" + System.currentTimeMillis() + ".java";
                 name = name.replace("..", "_").replace("/", "_").replace("\\", "_");
-                File dst = new File(p.srcDir(this), name);
+                String low = name.toLowerCase();
                 InputStream in = getContentResolver().openInputStream(u);
-                OutputStream out = new FileOutputStream(dst);
-                byte[] buf = new byte[8192];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                out.close();
-                in.close();
-                if (name.toLowerCase().endsWith(".zip")) {
-                    Ui.unzipJava(dst, p.srcDir(this));
-                    dst.delete();
+                if (in == null) { skipped++; continue; }
+                if (low.endsWith(".jar")) {
+                    // library → classpath, not source
+                    Ui.copyStream(in, new FileOutputStream(prep(new File(p.libsDir(this), name))));
+                    libs++;
+                } else if (low.endsWith(".zip")) {
+                    File tmp = new File(getCacheDir(), "import_" + System.currentTimeMillis() + ".zip");
+                    Ui.copyStream(in, new FileOutputStream(tmp));
+                    try { Ui.unzipJava(tmp, p.srcDir(this)); } finally { tmp.delete(); }
+                    src++;
+                } else if (low.endsWith(".java")) {
+                    File dst = new File(selectedDir.length() > 0 ? fileFor(selectedDir) : p.srcDir(this), name);
+                    Ui.copyStream(in, new FileOutputStream(prep(dst)));
+                    src++;
+                } else {
+                    in.close();
+                    skipped++;
                 }
-                count++;
-            } catch (Throwable ignored) { }
+            } catch (Throwable ignored) { skipped++; }
         }
         refreshFiles();
-        Ui.toast(this, count + " item(s) imported ✔");
+        Ui.toast(this, src + " source(s), " + libs + " library jar(s) imported"
+                + (skipped > 0 ? ", " + skipped + " skipped" : ""));
+    }
+
+    private static File prep(File f) {
+        File parent = f.getParentFile();
+        if (parent != null) parent.mkdirs();
+        return f;
     }
 
     private String uriName(Uri u) {
@@ -532,36 +686,59 @@ public class IdeActivity extends Activity {
         final String rel = (String) e[0];
         final boolean isDir = (Boolean) e[1];
         final String[] opts = isDir
-                ? new String[]{"Delete folder"}
-                : new String[]{"Open", "Rename", "Delete"};
-        new AlertDialog.Builder(this)
+                ? new String[]{"New file here", "Rename / move", "Delete folder"}
+                : new String[]{"Open", "Rename / move", "Duplicate", "Delete"};
+        Ui.dialog(this)
                 .setTitle(rel)
                 .setItems(opts, (d, w) -> {
                     if (isDir) {
-                        if (w == 0) confirmDeletePath(rel, true);
+                        String dn = rel.substring(0, rel.length() - 1);
+                        if (w == 0) { selectedDir = dn; newFileDialog(); }
+                        else if (w == 1) renameDialog(dn, true);
+                        else confirmDeletePath(rel, true);
                     } else {
                         if (w == 0) { saveCurrent(); openFile(rel); toggleExplorer(); }
-                        else if (w == 1) renameDialog(rel);
-                        else if (w == 2) confirmDeletePath(rel, false);
+                        else if (w == 1) renameDialog(rel, false);
+                        else if (w == 2) duplicate(rel);
+                        else confirmDeletePath(rel, false);
                     }
                 }).show();
     }
 
+    private void duplicate(String rel) {
+        saveCurrent();
+        String base = rel.substring(0, rel.length() - 5);
+        String cand = base + "Copy.java";
+        int n = 2;
+        while (fileFor(cand).exists()) cand = base + "Copy" + (n++) + ".java";
+        try {
+            Ui.copyFile(fileFor(rel), fileFor(cand));
+            refreshFiles();
+            Ui.toast(this, "Duplicated — rename the class inside!");
+        } catch (Throwable e) {
+            Ui.toast(this, "Duplicate failed: " + e.getMessage());
+        }
+    }
+
     private void confirmDeletePath(final String rel, final boolean dir) {
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Delete " + (dir ? "folder" : "file") + "?")
                 .setMessage(rel)
                 .setPositiveButton("Delete", (d, w) -> {
-                    File f = fileFor(dir ? rel.substring(0, rel.length() - 1) : rel);
-                    Project.deleteDir(f);
-                    String prefix = dir ? rel
-                            : rel.substring(0, Math.max(0, rel.lastIndexOf('/') + 1));
-                    if (currentRel != null && (currentRel.equals(rel)
-                            || currentRel.startsWith(prefix))) {
-                        currentRel = null;
-                        editor.setText("");
+                    String clean = dir ? rel.substring(0, rel.length() - 1) : rel;
+                    // never write the open file back after deleting it
+                    boolean hit = currentRel != null
+                            && (dir ? (currentRel.equals(clean) || currentRel.startsWith(rel))
+                                    : currentRel.equals(rel));
+                    if (hit) { currentRel = null; }
+                    Project.deleteDir(fileFor(clean));
+                    hist.remove(rel);
+                    if (hit) {
+                        setEditorText("");
+                        setDirty(false);
                         fileTitle.setText("Java2Dex IDE");
                     }
+                    if (dir && selectedDir.equals(clean)) selectedDir = "";
                     refreshFiles();
                     Ui.toast(this, "Deleted");
                 })
@@ -569,23 +746,35 @@ public class IdeActivity extends Activity {
                 .show();
     }
 
-    private void renameDialog(final String rel) {
+    private void renameDialog(final String rel, final boolean dir) {
         final EditText input = pathInput(rel);
         input.setText(rel);
-        new AlertDialog.Builder(this)
+        input.setSelection(rel.length());
+        Ui.dialog(this)
                 .setTitle("Rename / move")
                 .setMessage("Change name or path (use / for folders)")
                 .setView(wrapInput(input))
                 .setPositiveButton("Rename", (d, w) -> {
-                    String nr = input.getText().toString().trim().replace("\\", "/");
-                    if (nr.length() == 0 || nr.contains("..") || nr.equals(rel)) return;
+                    String nr = cleanRel(input.getText().toString());
+                    if (nr == null) { Ui.toast(this, "Invalid path"); return; }
+                    if (!dir && !nr.toLowerCase().endsWith(".java")) nr = nr + ".java";
+                    if (nr.equals(rel)) return;
                     File from = fileFor(rel);
                     File to = fileFor(nr);
-                    to.getParentFile().mkdirs();
+                    if (to.exists()) { Ui.toast(this, "Target already exists"); return; }
+                    saveCurrent();
+                    prep(to);
                     if (from.renameTo(to)) {
-                        if (rel.equals(currentRel)) {
-                            currentRel = nr;
-                            fileTitle.setText(nr.substring(nr.lastIndexOf('/') + 1));
+                        if (currentRel != null) {
+                            if (!dir && currentRel.equals(rel)) currentRel = nr;
+                            else if (dir && currentRel.startsWith(rel + "/"))
+                                currentRel = nr + currentRel.substring(rel.length());
+                            if (currentRel != null)
+                                fileTitle.setText(currentRel.substring(currentRel.lastIndexOf('/') + 1));
+                        }
+                        hist.clear();
+                        if (currentRel != null) {
+                            Hist h = new Hist(); h.last = editor.getText().toString(); hist.put(currentRel, h);
                         }
                         refreshFiles();
                         Ui.toast(this, "Renamed ✔");
@@ -600,44 +789,219 @@ public class IdeActivity extends Activity {
         confirmDeletePath(currentRel, false);
     }
 
-    // ================= editor tools =================
+    // ================================================================ editor tools
 
-    private void insertTab() {
-        int at = editor.getSelectionStart();
-        if (at < 0) at = 0;
-        editor.getText().insert(at, "    ");
+    private final InputFilter indentFilter = new InputFilter() {
+        @Override
+        public CharSequence filter(CharSequence src, int s, int e, Spanned dest, int ds, int de) {
+            if (programmatic || e - s != 1 || src.charAt(s) != '\n') return null;
+            int ls = ds;
+            while (ls > 0 && dest.charAt(ls - 1) != '\n') ls--;
+            int k = ls;
+            while (k < ds && (dest.charAt(k) == ' ' || dest.charAt(k) == '\t')) k++;
+            StringBuilder sb = new StringBuilder("\n");
+            sb.append(dest, ls, k);
+            int q = ds - 1;
+            while (q >= ls && dest.charAt(q) == ' ') q--;
+            if (q >= ls && dest.charAt(q) == '{') sb.append("    ");
+            return sb;
+        }
+    };
+
+    private void insertAtCaret(String text, int caretBack) {
+        int a = Math.max(0, editor.getSelectionStart());
+        int b = Math.max(0, editor.getSelectionEnd());
+        int lo = Math.min(a, b), hi = Math.max(a, b);
+        Editable ed = editor.getText();
+        if (caretBack > 0 && hi > lo) {
+            // wrap the selection:  { selection }
+            String sel = ed.subSequence(lo, hi).toString();
+            String open = text.substring(0, text.length() - caretBack);
+            String close = text.substring(text.length() - caretBack);
+            ed.replace(lo, hi, open + sel + close);
+            editor.setSelection(lo + open.length() + sel.length() + close.length());
+            return;
+        }
+        ed.replace(lo, hi, text);
+        editor.setSelection(lo + text.length() - caretBack);
+    }
+
+    // ---- undo / redo (real history, not a single snapshot) ----
+
+    private void scheduleSnapshot() {
+        if (snapRun != null) hl.removeCallbacks(snapRun);
+        snapRun = new Runnable() { @Override public void run() { snapshot(); } };
+        hl.postDelayed(snapRun, 700);
+    }
+
+    private void snapshot() {
+        if (currentRel == null) return;
+        Hist h = hist.get(currentRel);
+        if (h == null) return;
+        String now = editor.getText().toString();
+        if (h.last != null && !h.last.equals(now)) {
+            h.undo.add(h.last);
+            if (h.undo.size() > 60) h.undo.remove(0);
+            h.redo.clear();
+        }
+        h.last = now;
     }
 
     private void undo() {
         if (currentRel == null) { Ui.toast(this, "No file open"); return; }
-        String snap = undoMap.get(currentRel);
-        if (snap == null) { Ui.toast(this, "Nothing to undo"); return; }
-        String now = editor.getText().toString();
-        undoMap.put(currentRel, now);
-        editor.setText(snap);
-        editor.setSelection(snap.length());
-        Ui.toast(this, "Undo done ↩");
+        snapshot();
+        Hist h = hist.get(currentRel);
+        if (h == null || h.undo.isEmpty()) { Ui.toast(this, "Nothing to undo"); return; }
+        h.redo.add(editor.getText().toString());
+        String prev = h.undo.remove(h.undo.size() - 1);
+        applyHistory(h, prev);
     }
 
+    private void redo() {
+        if (currentRel == null) { Ui.toast(this, "No file open"); return; }
+        snapshot();
+        Hist h = hist.get(currentRel);
+        if (h == null || h.redo.isEmpty()) { Ui.toast(this, "Nothing to redo"); return; }
+        h.undo.add(editor.getText().toString());
+        String next = h.redo.remove(h.redo.size() - 1);
+        applyHistory(h, next);
+    }
+
+    private void applyHistory(Hist h, String text) {
+        int caret = Math.min(editor.getSelectionStart() < 0 ? 0 : editor.getSelectionStart(), text.length());
+        setEditorText(text);
+        h.last = text;
+        editor.setSelection(caret);
+        setDirty(true);
+        scheduleAutosave();
+    }
+
+    // ---- autosave ----
+
+    private void scheduleAutosave() {
+        if (saveRun != null) hl.removeCallbacks(saveRun);
+        saveRun = new Runnable() {
+            @Override public void run() { if (dirty) saveQuiet(); }
+        };
+        hl.postDelayed(saveRun, 1500);
+    }
+
+    private void saveQuiet() {
+        if (currentRel == null) return;
+        try {
+            Ui.writeText(fileFor(currentRel), editor.getText().toString());
+            setDirty(false);
+        } catch (Throwable ignored) { }
+    }
+
+    // ---- find / replace / goto ----
+
     private void findDialog() {
-        final EditText input = pathInput("Find text…");
-        new AlertDialog.Builder(this)
-                .setTitle("Find in code")
-                .setView(wrapInput(input))
-                .setPositiveButton("Find", (d, w) -> findNext(input.getText().toString()))
-                .setNegativeButton("Cancel", null)
-                .show();
+        LinearLayout box = new LinearLayout(this);
+        box.setOrientation(LinearLayout.VERTICAL);
+        box.setPadding(Ui.dp(20), Ui.dp(8), Ui.dp(20), 0);
+        final EditText find = pathInput("Find…");
+        final EditText repl = pathInput("Replace with…");
+        String sel = selectedText();
+        find.setText(sel.length() > 0 && sel.indexOf('\n') < 0 ? sel : lastFind);
+        repl.setText(lastRepl);
+        find.setSelection(find.getText().length());
+        box.addView(find, new LinearLayout.LayoutParams(-1, -2));
+        box.addView(repl, new LinearLayout.LayoutParams(-1, -2));
+
+        final AlertDialog d = Ui.dialog(this)
+                .setTitle("Find & replace")
+                .setView(box)
+                .setPositiveButton("Next", null)
+                .setNeutralButton("Replace", null)
+                .setNegativeButton("All", null)
+                .create();
+        d.show();
+        // keep the dialog open between actions
+        d.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+            lastFind = find.getText().toString();
+            findNext(lastFind);
+        });
+        d.getButton(AlertDialog.BUTTON_NEUTRAL).setOnClickListener(v -> {
+            lastFind = find.getText().toString();
+            lastRepl = repl.getText().toString();
+            replaceOne(lastFind, lastRepl);
+        });
+        d.getButton(AlertDialog.BUTTON_NEGATIVE).setOnClickListener(v -> {
+            lastFind = find.getText().toString();
+            lastRepl = repl.getText().toString();
+            replaceAll(lastFind, lastRepl);
+            d.dismiss();
+        });
+    }
+
+    private String selectedText() {
+        int a = editor.getSelectionStart(), b = editor.getSelectionEnd();
+        if (a < 0 || b < 0 || a == b) return "";
+        return editor.getText().subSequence(Math.min(a, b), Math.max(a, b)).toString();
     }
 
     private void findNext(String q) {
         if (q == null || q.length() == 0) return;
         String text = editor.getText().toString();
-        int start = editor.getSelectionEnd();
+        int start = Math.max(editor.getSelectionStart(), editor.getSelectionEnd());
         int idx = text.indexOf(q, Math.max(0, start));
-        if (idx < 0) idx = text.indexOf(q, 0);
+        boolean wrapped = false;
+        if (idx < 0) { idx = text.indexOf(q, 0); wrapped = true; }
         if (idx < 0) { Ui.toast(this, "Not found"); return; }
+        if (wrapped) Ui.toast(this, "Wrapped to top");
         editor.requestFocus();
         editor.setSelection(idx, idx + q.length());
+    }
+
+    private void replaceOne(String q, String r) {
+        if (q.length() == 0) return;
+        if (selectedText().equals(q)) {
+            int a = Math.min(editor.getSelectionStart(), editor.getSelectionEnd());
+            editor.getText().replace(a, a + q.length(), r);
+            editor.setSelection(a + r.length());
+        }
+        findNext(q);
+    }
+
+    private void replaceAll(String q, String r) {
+        if (q.length() == 0) return;
+        String text = editor.getText().toString();
+        int count = 0, from = 0;
+        while ((from = text.indexOf(q, from)) >= 0) { count++; from += q.length(); }
+        if (count == 0) { Ui.toast(this, "Not found"); return; }
+        snapshot();
+        int caret = Math.min(Math.max(0, editor.getSelectionStart()), text.length());
+        editor.setText(text.replace(q, r));
+        editor.setSelection(Math.min(caret, editor.getText().length()));
+        Ui.toast(this, count + " replaced");
+    }
+
+    private void gotoDialog() {
+        final EditText in = pathInput("Line number");
+        in.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        Ui.dialog(this)
+                .setTitle("Go to line")
+                .setView(wrapInput(in))
+                .setPositiveButton("Go", (d, w) -> {
+                    try { gotoLine(Integer.parseInt(in.getText().toString().trim())); }
+                    catch (Exception e) { Ui.toast(this, "Enter a line number"); }
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void gotoLine(int line) {
+        String text = editor.getText().toString();
+        int off = 0, cur = 1;
+        while (cur < line) {
+            int nl = text.indexOf('\n', off);
+            if (nl < 0) break;
+            off = nl + 1;
+            cur++;
+        }
+        editor.requestFocus();
+        editor.setSelection(Math.min(off, text.length()));
     }
 
     private void changeFont(int delta) {
@@ -654,6 +1018,7 @@ public class IdeActivity extends Activity {
         Prefs.wrap(this, wrapOn);
         editor.setHorizontallyScrolling(!wrapOn);
         Ui.toast(this, wrapOn ? "Word wrap ON" : "Word wrap OFF");
+        updateMeta();
     }
 
     private void snippetsDialog() {
@@ -661,69 +1026,129 @@ public class IdeActivity extends Activity {
                 {"public class", "public class NAME {\n    \n}\n"},
                 {"main method", "public static void main(String[] args) {\n    \n}\n"},
                 {"Log.d", "android.util.Log.d(\"Java2Dex\", \"msg\");\n"},
-                {"Toast", "android.widget.Toast.makeText(ctx, \"msg\", 0).show();\n"},
+                {"Toast", "android.widget.Toast.makeText(ctx, \"msg\", android.widget.Toast.LENGTH_SHORT).show();\n"},
                 {"for loop", "for (int i = 0; i < 10; i++) {\n    \n}\n"},
+                {"for-each", "for (Object o : list) {\n    \n}\n"},
                 {"if-else", "if (cond) {\n    \n} else {\n    \n}\n"},
-                {"try-catch", "try {\n    \n} catch (Exception e) {\n    \n}\n"},
+                {"try-catch", "try {\n    \n} catch (Throwable e) {\n    \n}\n"},
+                {"Runnable / UI thread", "new android.os.Handler(android.os.Looper.getMainLooper()).post(new Runnable() {\n    @Override\n    public void run() {\n        \n    }\n});\n"},
+                {"Reflection call", "java.lang.reflect.Method m = cls.getDeclaredMethod(\"name\");\nm.setAccessible(true);\nObject r = m.invoke(obj);\n"},
                 {"Xposed hook", "XposedHelpers.findAndHookMethod(\"cls\", lpparam.classLoader,\n        \"method\", new XC_MethodHook() {\n    @Override\n    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {\n        \n    }\n});\n"}
         };
         String[] names = new String[snips.length];
         for (int i = 0; i < snips.length; i++) names[i] = snips[i][0];
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Insert snippet")
-                .setItems(names, (d, w) -> {
-                    int at = editor.getSelectionStart();
-                    if (at < 0) at = 0;
-                    editor.getText().insert(at, snips[w][1]);
-                }).show();
+                .setItems(names, (d, w) -> insertAtCaret(snips[w][1], 0))
+                .show();
     }
 
-    // ================= convert =================
+    // ================================================================ convert
 
     private void convert() {
-        saveCurrent();
+        if (Converter.isRunning()) { Ui.toast(this, "A conversion is already running"); return; }
+        if (!saveCurrent()) return;
         overlay.setVisibility(View.VISIBLE);
         Converter.convert(this, p, new Converter.Callback() {
             @Override public void onStep(String s) { overlayStatus.setText(s); }
             @Override public void onDone(boolean ok, String log) {
                 overlay.setVisibility(View.GONE);
-                try {
-                    FileWriter w = new FileWriter(p.logFile(IdeActivity.this));
-                    w.write(log);
-                    w.close();
-                } catch (Throwable ignored) { }
-                if (ok) {
-                    new AlertDialog.Builder(IdeActivity.this)
-                            .setTitle("✔ Converted")
-                            .setMessage("DEX saved to:\n"
-                                    + p.publicDexFile(IdeActivity.this).getAbsolutePath())
-                            .setPositiveButton("Open Smali", (d, w) -> {
-                                Intent i = new Intent(IdeActivity.this, DexViewerActivity.class);
-                                i.putExtra("id", p.id);
-                                startActivity(i);
-                            })
-                            .setNegativeButton("OK", null)
-                            .show();
-                } else {
-                    ScrollView sc = new ScrollView(IdeActivity.this);
-                    TextView tv = Ui.text(IdeActivity.this, log, 11.5f, 0xFF7F1D1D, false);
-                    tv.setTypeface(Typeface.MONOSPACE);
-                    int pd = Ui.dp(14);
-                    tv.setPadding(pd, pd, pd, pd);
-                    sc.addView(tv, new FrameLayout.LayoutParams(-1, -2));
-                    new AlertDialog.Builder(IdeActivity.this)
-                            .setTitle("✖ Build Failed")
-                            .setView(sc)
-                            .setPositiveButton("Copy",
-                                    (d, w) -> Ui.copy(IdeActivity.this, "log", log))
-                            .setNegativeButton("Close", null)
-                            .show();
-                }
+                if (!Ui.alive(IdeActivity.this)) return;
+                Project fresh = Project.byId(IdeActivity.this, p.id);
+                if (fresh != null) p = fresh;
+                if (ok) showSuccess(); else showBuildFailed(log);
             }
         });
     }
 
-    // ================= highlighting =================
+    private void showSuccess() {
+        List<File> dex = p.publicDexFiles(this);
+        StringBuilder sb = new StringBuilder("Saved to:\n").append(p.publicDexDir(this).getAbsolutePath());
+        sb.append("\n\n");
+        for (File f : dex) sb.append(f.getName()).append("  •  ").append(Ui.size(f.length())).append('\n');
+        Ui.dialog(this)
+                .setTitle("✔ Converted")
+                .setMessage(sb.toString().trim())
+                .setPositiveButton("Smali", (d, w) -> {
+                    Intent i = new Intent(this, DexViewerActivity.class);
+                    i.putExtra("id", p.id);
+                    startActivity(i);
+                })
+                .setNeutralButton("Share", (d, w) ->
+                        Ui.shareFile(this, p.publicDexFile(this), p.safeName() + "_classes.dex"))
+                .setNegativeButton("OK", null)
+                .show();
+    }
+
+    private static class BuildError {
+        String rel; int line; String msg;
+    }
+
+    private static final Pattern ERR = Pattern.compile("ERROR in (.+?\\.java) \\(at line (\\d+)\\)");
+
+    private List<BuildError> parseErrors(String log) {
+        List<BuildError> out = new ArrayList<>();
+        String[] lines = log.split("\n");
+        String base = p.srcDir(this).getAbsolutePath() + "/";
+        for (int i = 0; i < lines.length; i++) {
+            Matcher m = ERR.matcher(lines[i]);
+            if (!m.find()) continue;
+            BuildError e = new BuildError();
+            String path = m.group(1);
+            e.rel = path.startsWith(base) ? path.substring(base.length()) : null;
+            try { e.line = Integer.parseInt(m.group(2)); } catch (Exception ex) { e.line = 1; }
+            // ECJ prints: source line, caret line, then the message
+            e.msg = (i + 3 < lines.length) ? lines[i + 3].trim() : "";
+            if (e.msg.length() == 0 && i + 1 < lines.length) e.msg = lines[i + 1].trim();
+            out.add(e);
+        }
+        return out;
+    }
+
+    private void showBuildFailed(final String log) {
+        final List<BuildError> errs = parseErrors(log);
+        if (errs.isEmpty()) {
+            showRawLog(log);
+            return;
+        }
+        String[] items = new String[errs.size()];
+        for (int i = 0; i < errs.size(); i++) {
+            BuildError e = errs.get(i);
+            String name = e.rel == null ? "?" : e.rel.substring(e.rel.lastIndexOf('/') + 1);
+            items[i] = name + ":" + e.line + "  —  " + e.msg;
+        }
+        Ui.dialog(this)
+                .setTitle("✖ " + errs.size() + " error" + (errs.size() == 1 ? "" : "s") + " — tap to jump")
+                .setItems(items, (d, w) -> {
+                    BuildError e = errs.get(w);
+                    if (e.rel != null && fileFor(e.rel).exists()) {
+                        saveCurrent();
+                        openFile(e.rel);
+                        gotoLine(e.line);
+                    }
+                })
+                .setPositiveButton("Full log", (d, w) -> showRawLog(log))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    private void showRawLog(final String log) {
+        ScrollView sc = new ScrollView(this);
+        TextView tv = Ui.text(this, log, 11.5f, t.danger, false);
+        tv.setTypeface(Typeface.MONOSPACE);
+        tv.setTextIsSelectable(true);
+        int pd = Ui.dp(14);
+        tv.setPadding(pd, pd, pd, pd);
+        sc.addView(tv, new FrameLayout.LayoutParams(-1, -2));
+        Ui.dialog(this)
+                .setTitle("✖ Build Failed")
+                .setView(sc)
+                .setPositiveButton("Copy", (d, w) -> Ui.copy(this, "log", log))
+                .setNegativeButton("Close", null)
+                .show();
+    }
+
+    // ================================================================ highlighting
 
     private void scheduleHighlight() {
         if (hlRun != null) hl.removeCallbacks(hlRun);
@@ -737,14 +1162,17 @@ public class IdeActivity extends Activity {
         Editable e = editor.getText();
         if (e == null) return;
         int len = e.length();
-        if (len == 0 || len > 30000) return;
         ForegroundColorSpan[] spans = e.getSpans(0, len, ForegroundColorSpan.class);
         for (ForegroundColorSpan s : spans) e.removeSpan(s);
+        if (len == 0 || len > MAX_HIGHLIGHT) return;
 
-        int kwColor = Prefs.dark(this) ? 0xFFC084FC : 0xFF7C3AED;
-        int strColor = Prefs.dark(this) ? 0xFF34D399 : 0xFF059669;
-        int comColor = Prefs.dark(this) ? 0xFF64748B : 0xFF94A3B8;
-        int numColor = Prefs.dark(this) ? 0xFFFB923C : 0xFFEA580C;
+        boolean dk = Prefs.dark(this);
+        int kwColor = dk ? 0xFFC084FC : 0xFF7C3AED;
+        int strColor = dk ? 0xFF34D399 : 0xFF059669;
+        int comColor = dk ? 0xFF64748B : 0xFF94A3B8;
+        int numColor = dk ? 0xFFFB923C : 0xFFEA580C;
+        int annColor = dk ? 0xFFFBBF24 : 0xFFB45309;
+        int typColor = dk ? 0xFF60A5FA : 0xFF2563EB;
 
         String text = e.toString();
         int i = 0;
@@ -753,44 +1181,40 @@ public class IdeActivity extends Activity {
             if (c == '/' && i + 1 < len && text.charAt(i + 1) == '/') {
                 int end = text.indexOf('\n', i);
                 if (end < 0) end = len;
-                e.setSpan(new ForegroundColorSpan(comColor), i, end,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                span(e, comColor, i, end);
                 i = end;
             } else if (c == '/' && i + 1 < len && text.charAt(i + 1) == '*') {
                 int end = text.indexOf("*/", i + 2);
                 end = end < 0 ? len : end + 2;
-                e.setSpan(new ForegroundColorSpan(comColor), i, Math.min(end, len),
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                span(e, comColor, i, end);
                 i = end;
-            } else if (c == '"') {
+            } else if (c == '"' || c == '\'') {
                 int j = i + 1;
                 while (j < len) {
-                    if (text.charAt(j) == '\\') { j += 2; continue; }
-                    if (text.charAt(j) == '"' || text.charAt(j) == '\n') { j++; break; }
+                    char d = text.charAt(j);
+                    if (d == '\\') { j += 2; continue; }
+                    if (d == c || d == '\n') { j++; break; }
                     j++;
                 }
-                e.setSpan(new ForegroundColorSpan(strColor), i, Math.min(j, len),
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                span(e, strColor, i, Math.min(j, len));
+                i = Math.min(j, len);
+            } else if (c == '@' && i + 1 < len && Character.isJavaIdentifierStart(text.charAt(i + 1))) {
+                int j = i + 1;
+                while (j < len && Character.isJavaIdentifierPart(text.charAt(j))) j++;
+                span(e, annColor, i, j);
                 i = j;
             } else if (Character.isDigit(c)) {
                 int j = i;
-                while (j < len && (Character.isDigit(text.charAt(j))
-                        || text.charAt(j) == '.' || text.charAt(j) == 'x'
-                        || text.charAt(j) == 'L' || text.charAt(j) == 'f')) j++;
-                e.setSpan(new ForegroundColorSpan(numColor), i, j,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+                while (j < len && (Character.isLetterOrDigit(text.charAt(j)) || text.charAt(j) == '.'
+                        || text.charAt(j) == '_')) j++;
+                span(e, numColor, i, j);
                 i = j;
             } else if (Character.isJavaIdentifierStart(c)) {
                 int j = i;
                 while (j < len && Character.isJavaIdentifierPart(text.charAt(j))) j++;
                 String word = text.substring(i, j);
-                for (String k : KEYWORDS) {
-                    if (k.equals(word)) {
-                        e.setSpan(new ForegroundColorSpan(kwColor), i, j,
-                                Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
-                        break;
-                    }
-                }
+                if (KEYWORDS.contains(word)) span(e, kwColor, i, j);
+                else if (Character.isUpperCase(c) && j - i > 1 && !isAllCaps(word)) span(e, typColor, i, j);
                 i = j;
             } else {
                 i++;
@@ -798,23 +1222,38 @@ public class IdeActivity extends Activity {
         }
     }
 
+    private static boolean isAllCaps(String w) {
+        for (int i = 0; i < w.length(); i++) {
+            char c = w.charAt(i);
+            if (Character.isLowerCase(c)) return false;
+        }
+        return true;   // CONSTANT_NAMES are not types
+    }
+
+    private static void span(Editable e, int color, int a, int b) {
+        if (b > a) e.setSpan(new ForegroundColorSpan(color), a, b, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE);
+    }
+
     private void updateMeta() {
-        String text = editor.getText() == null ? "" : editor.getText().toString();
+        if (editor == null || metaLabel == null) return;
         int sel = editor.getSelectionEnd();
+        Editable ed = editor.getText();
         if (sel < 0) sel = 0;
-        if (sel > text.length()) sel = text.length();
-        int lines = 1;
-        int lastNl = -1;
-        for (int i = 0; i < sel; i++) {
-            if (text.charAt(i) == '\n') { lines++; lastNl = i; }
+        if (sel > ed.length()) sel = ed.length();
+        int lines = 1, lastNl = -1, total = 1;
+        for (int i = 0, n = ed.length(); i < n; i++) {
+            if (ed.charAt(i) == '\n') {
+                total++;
+                if (i < sel) { lines++; lastNl = i; }
+            }
         }
         int col = sel - lastNl;
-        metaLabel.setText("Ln " + lines + ", Col " + col + "  •  font " + Prefs.fontSize(this)
-                + (wrapOn ? " • wrap" : "")
+        metaLabel.setText("Ln " + lines + ", Col " + col + "  •  " + total + " lines  •  font "
+                + Prefs.fontSize(this) + (wrapOn ? " • wrap" : "")
                 + (currentRel != null ? "  •  " + currentRel : ""));
     }
 
-    // ================= helpers =================
+    // ================================================================ helpers
 
     private FrameLayout wrapInput(EditText e) {
         FrameLayout f = new FrameLayout(this);
@@ -837,10 +1276,17 @@ public class IdeActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        snapshot();
         saveCurrent();
     }
 
-    // ================= adapter =================
+    @Override
+    protected void onDestroy() {
+        hl.removeCallbacksAndMessages(null);
+        super.onDestroy();
+    }
+
+    // ================================================================ adapter
 
     private class FilesAdapter extends BaseAdapter {
         @Override public int getCount() { return entries.size(); }
@@ -849,23 +1295,42 @@ public class IdeActivity extends Activity {
 
         @Override
         public View getView(int position, View convertView, android.view.ViewGroup parent) {
-            LinearLayout card = new LinearLayout(IdeActivity.this);
-            card.setGravity(Gravity.CENTER_VERTICAL);
-            card.setBackground(Ui.ripple(IdeActivity.this,
-                    Ui.outline(t.card, t.cardStroke, 12, 1, IdeActivity.this)));
-            int pad = Ui.dp(12);
-            card.setPadding(pad, pad, pad, pad);
+            LinearLayout card;
+            TextView tv;
+            if (convertView == null) {
+                card = new LinearLayout(IdeActivity.this);
+                card.setGravity(Gravity.CENTER_VERTICAL);
+                tv = Ui.text(IdeActivity.this, "", 12.5f, t.text, false);
+                tv.setSingleLine(true);
+                tv.setEllipsize(android.text.TextUtils.TruncateAt.MIDDLE);
+                card.addView(tv, new LinearLayout.LayoutParams(-1, -2));
+                card.setTag(tv);
+            } else {
+                card = (LinearLayout) convertView;
+                tv = (TextView) card.getTag();
+            }
             Object[] e = entries.get(position);
             boolean isDir = (Boolean) e[1];
             String rel = (String) e[0];
-            TextView tv = Ui.text(IdeActivity.this,
-                    (isDir ? "📁 " : "📄 ") + rel, 12,
-                    isDir ? t.accentDark : t.text, isDir);
-            tv.setSingleLine(true);
-            card.addView(tv, new LinearLayout.LayoutParams(-1, -2));
-            if (rel.equals(currentRel)) {
+            String path = isDir ? rel.substring(0, rel.length() - 1) : rel;
+            int depth = 0;
+            for (int i = 0; i < path.length(); i++) if (path.charAt(i) == '/') depth++;
+            String name = path.substring(path.lastIndexOf('/') + 1);
+
+            int pad = Ui.dp(12);
+            card.setPadding(pad + depth * Ui.dp(16), pad, pad, pad);
+            tv.setText((isDir ? "📁 " : "📄 ") + name);
+            tv.setTextColor(isDir ? t.accentDark : t.text);
+            tv.setTypeface(isDir ? Typeface.create("sans-serif-medium", Typeface.BOLD) : Typeface.DEFAULT);
+
+            boolean active = !isDir && rel.equals(currentRel);
+            boolean chosenDir = isDir && path.equals(selectedDir);
+            if (active || chosenDir) {
                 card.setBackground(Ui.ripple(IdeActivity.this,
                         Ui.outline(t.accentSoft, t.accent, 12, 1.4f, IdeActivity.this)));
+            } else {
+                card.setBackground(Ui.ripple(IdeActivity.this,
+                        Ui.outline(t.card, t.cardStroke, 12, 1, IdeActivity.this)));
             }
             return card;
         }

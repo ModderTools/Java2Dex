@@ -44,6 +44,7 @@ public final class SmaliGen {
         public String ret;
         public int codeOff;
         public int registers;
+        public int ins;          // incoming argument registers (p0…)
         public int[] insns; // null = no code (abstract/native)
     }
 
@@ -64,24 +65,25 @@ public final class SmaliGen {
 
     // ================= primitives =================
 
-    private static int u1(byte[] d, int p) { return d[p] & 0xFF; }
-
     private static int u2(byte[] d, int p) {
+        if (p < 0 || p + 1 >= d.length) return 0;
         return (d[p] & 0xFF) | ((d[p + 1] & 0xFF) << 8);
     }
 
     private static int u4(byte[] d, int p) {
+        if (p < 0 || p + 3 >= d.length) return 0;
         return (d[p] & 0xFF) | ((d[p + 1] & 0xFF) << 8)
                 | ((d[p + 2] & 0xFF) << 16) | ((d[p + 3] & 0xFF) << 24);
     }
 
     private static int uleb(byte[] d, int[] pos) {
         int r = 0, sh = 0, p = pos[0];
-        while (true) {
+        while (p < d.length) {
             int b = d[p++] & 0xFF;
             r |= (b & 0x7F) << sh;
             if ((b & 0x80) == 0) break;
             sh += 7;
+            if (sh > 35) break;
         }
         pos[0] = p;
         return r;
@@ -274,6 +276,7 @@ public final class SmaliGen {
 
         if (codeOff != 0 && codeOff + 16 <= f.d.length) {
             m.registers = u2(f.d, codeOff);
+            m.ins = u2(f.d, codeOff + 2);
             int insnsSize = u4(f.d, codeOff + 12);
             if (insnsSize > 0 && codeOff + 16 + insnsSize * 2 <= f.d.length) {
                 m.insns = new int[insnsSize];
@@ -303,6 +306,26 @@ public final class SmaliGen {
             if (c.type.equals(raw)) return c;
         }
         return null;
+    }
+
+    /** "class", "interface", "enum", "annotation" or "abstract class" */
+    public static String kind(DexClass c) {
+        if ((c.access & 0x2000) != 0) return "annotation";
+        if ((c.access & 0x200) != 0) return "interface";
+        if ((c.access & 0x4000) != 0) return "enum";
+        if ((c.access & 0x400) != 0) return "abstract class";
+        return "class";
+    }
+
+    /** every method as "pkg.Class->name(params)ret" for the Methods tab */
+    public static List<String> methodSignatures(DexFile f) {
+        List<String> out = new ArrayList<String>();
+        for (DexClass c : f.classes) {
+            String cn = pretty(c.type);
+            for (DexMethod m : c.directMethods) out.add(cn + "->" + m.name + "(" + m.params + ")" + m.ret);
+            for (DexMethod m : c.virtualMethods) out.add(cn + "->" + m.name + "(" + m.params + ")" + m.ret);
+        }
+        return out;
     }
 
     public static String pretty(String t) {
@@ -396,24 +419,115 @@ public final class SmaliGen {
             return b.toString();
         }
         b.append("    .registers ").append(m.registers).append('\n');
+
+        final int[] ins = m.insns;
+        regTotal.set(m.registers);
+        regIns.set(m.ins);
+
+        // ---- pass 1: instruction boundaries, branch targets, payload owners ----
+        java.util.TreeSet<Integer> labels = new java.util.TreeSet<Integer>();
+        java.util.HashMap<Integer, Integer> payloadOwner = new java.util.HashMap<Integer, Integer>();
+        List<int[]> map = new ArrayList<int[]>();           // {offset, width}
         int p = 0;
-        while (p < m.insns.length) {
-            try {
-                int w = insnWidth(m.insns, p);
-                if (w <= 0 || p + w > m.insns.length) {
-                    b.append("    # truncated\n");
-                    break;
-                }
-                String line = decode(m.insns, p, w);
-                if (line != null) b.append("    ").append(line).append('\n');
-                p += w;
-            } catch (Throwable t) {
-                b.append("    # decode error\n");
-                break;
+        while (p < ins.length) {
+            int w;
+            try { w = insnWidth(ins, p); } catch (Throwable t) { w = 0; }
+            if (w <= 0 || p + w > ins.length) break;
+            map.add(new int[]{p, w});
+            int op = ins[p] & 0xFF;
+            if (op == 0x26 || op == 0x2B || op == 0x2C) {
+                int po = p + s32(ins[p + 1], ins[p + 2]);
+                labels.add(po);
+                payloadOwner.put(po, p);
+            } else {
+                int tg = branchTarget(ins, p);
+                if (tg != Integer.MIN_VALUE) labels.add(tg);
             }
+            p += w;
+        }
+        for (int[] e : map) {                                // switch case targets
+            int off = e[0];
+            if ((ins[off] & 0xFF) != 0 || e[1] <= 1) continue;
+            Integer owner = payloadOwner.get(off);
+            if (owner == null) continue;
+            int hi = (ins[off] >> 8) & 0xFF;
+            try {
+                if (hi == 0x01) {
+                    int size = ins[off + 1];
+                    for (int i = 0; i < size; i++)
+                        labels.add(owner + s32(ins[off + 4 + i * 2], ins[off + 5 + i * 2]));
+                } else if (hi == 0x02) {
+                    int size = ins[off + 1];
+                    for (int i = 0; i < size; i++)
+                        labels.add(owner + s32(ins[off + 2 + size * 2 + i * 2], ins[off + 3 + size * 2 + i * 2]));
+                }
+            } catch (Throwable ignored) { }
+        }
+
+        // ---- pass 2: emit ----
+        for (int[] e : map) {
+            int off = e[0], w = e[1];
+            try {
+                if (labels.contains(off)) b.append("    ").append(lbl(off)).append('\n');
+                int u = ins[off];
+                if ((u & 0xFF) == 0 && w > 1) {
+                    appendPayload(b, ins, off, w, payloadOwner.get(off));
+                } else {
+                    String line = decode(ins, off, w);
+                    if (line != null) b.append("    ").append(line).append('\n');
+                }
+            } catch (Throwable t) {
+                b.append("    # decode error at ").append(hex(off)).append('\n');
+            }
+        }
+        if (!map.isEmpty()) {
+            int[] last = map.get(map.size() - 1);
+            if (last[0] + last[1] < ins.length) b.append("    # truncated / undecodable tail\n");
+        } else {
+            b.append("    # undecodable code\n");
         }
         b.append(".end method\n\n");
         return b.toString();
+    }
+
+    private static void appendPayload(StringBuilder b, int[] ins, int off, int w, Integer owner) {
+        int hi = (ins[off] >> 8) & 0xFF;
+        int base = owner == null ? 0 : owner;
+        if (hi == 0x01) {
+            int size = ins[off + 1];
+            b.append("    .packed-switch ").append(lit(s32(ins[off + 2], ins[off + 3]))).append('\n');
+            for (int i = 0; i < size; i++)
+                b.append("        ").append(lbl(base + s32(ins[off + 4 + i * 2], ins[off + 5 + i * 2]))).append('\n');
+            b.append("    .end packed-switch\n");
+        } else if (hi == 0x02) {
+            int size = ins[off + 1];
+            b.append("    .sparse-switch\n");
+            for (int i = 0; i < size; i++) {
+                int key = s32(ins[off + 2 + i * 2], ins[off + 3 + i * 2]);
+                int tgt = s32(ins[off + 2 + size * 2 + i * 2], ins[off + 3 + size * 2 + i * 2]);
+                b.append("        ").append(lit(key)).append(" -> ").append(lbl(base + tgt)).append('\n');
+            }
+            b.append("    .end sparse-switch\n");
+        } else if (hi == 0x03) {
+            int ew = ins[off + 1];
+            int size = (ins[off + 2] & 0xFFFF) | (ins[off + 3] << 16);
+            b.append("    .array-data ").append(ew).append('\n');
+            int bytePos = 0;
+            for (int i = 0; i < size; i++) {
+                long v = 0;
+                for (int k = 0; k < ew; k++) {
+                    int unit = ins[off + 4 + (bytePos >> 1)];
+                    int by = (bytePos & 1) == 0 ? (unit & 0xFF) : ((unit >> 8) & 0xFF);
+                    v |= ((long) by) << (8 * k);
+                    bytePos++;
+                }
+                if (ew == 1) v = (byte) v; else if (ew == 2) v = (short) v; else if (ew == 4) v = (int) v;
+                b.append("        ").append(lit(v)).append(ew == 1 ? "t" : ew == 2 ? "s" : ew == 8 ? "L" : "").append('\n');
+            }
+            b.append("    .end array-data\n");
+        } else {
+            b.append("    # payload (").append(w).append(" units)\n");
+        }
     }
 
     // ================= instruction engine =================
@@ -506,7 +620,9 @@ public final class SmaliGen {
         w(0x22, 2); w(0x23, 2);
         w(0x24, 3); w(0x25, 3); w(0x26, 3);
         w(0x29, 2); w(0x2A, 3); w(0x2B, 3); w(0x2C, 3);
-        for (int i = 0x32; i <= 0x37; i++) w(i, 2);
+        for (int i = 0x2D; i <= 0x31; i++) w(i, 2);   // cmpl/cmpg/cmp-long (23x)
+        for (int i = 0x32; i <= 0x37; i++) w(i, 2);   // if-eq … if-le   (22t)
+        for (int i = 0x38; i <= 0x3D; i++) w(i, 2);   // if-eqz … if-lez (21t)
         for (int i = 0x44; i <= 0x51; i++) w(i, 2);
         for (int i = 0x52; i <= 0x5F; i++) w(i, 2);
         for (int i = 0x60; i <= 0x6D; i++) w(i, 2);
@@ -543,20 +659,50 @@ public final class SmaliGen {
         return WTABLE[op];
     }
 
+    private static final ThreadLocal<Integer> regTotal = new ThreadLocal<Integer>();
+    private static final ThreadLocal<Integer> regIns = new ThreadLocal<Integer>();
+
+    /** v-register or, for incoming arguments, the smali p-register */
+    private static String reg(int r) {
+        Integer total = regTotal.get(), ins = regIns.get();
+        if (total != null && ins != null && ins > 0 && r >= total - ins) return "p" + (r - (total - ins));
+        return "v" + r;
+    }
+
+    private static String lit(long v) {
+        return v < 0 ? "-0x" + Long.toHexString(-v) : "0x" + Long.toHexString(v);
+    }
+
+    private static String lbl(int off) { return ":label_" + Integer.toHexString(off); }
+
+    /** absolute code-unit target of a branch instruction, or MIN_VALUE if it is not a plain branch */
+    private static int branchTarget(int[] ins, int p) {
+        int u = ins[p];
+        int op = u & 0xFF;
+        if (op == 0x28) return p + s8((u >> 8) & 0xFF);
+        if (op == 0x29) return p + s16(ins[p + 1]);
+        if (op == 0x2A) return p + s32(ins[p + 1], ins[p + 2]);
+        if (op >= 0x32 && op <= 0x3D) return p + s16(ins[p + 1]);
+        return Integer.MIN_VALUE;
+    }
+
     private static int s4(int v) { v &= 0xF; return (v >= 8) ? v - 16 : v; }
     private static int s8(int v) { v &= 0xFF; return (v >= 128) ? v - 256 : v; }
     private static int s16(int v) { v &= 0xFFFF; return (v >= 0x8000) ? v - 0x10000 : v; }
     private static int s32(int lo, int hi) { return lo | (hi << 16); }
     private static String hex(int v) { return "0x" + Integer.toHexString(v); }
 
-    private static String inv35c(String ref, int count, int regsUnit) {
+    /** format 35c: first unit = A|G|op  (A = count, G = 5th register), third unit = F|E|D|C */
+    private static String inv35c(String ref, int firstUnit, int regsUnit) {
+        int count = (firstUnit >> 12) & 0xF;
+        int G = (firstUnit >> 8) & 0xF;
         int C = regsUnit & 0xF, D = (regsUnit >> 4) & 0xF;
         int E = (regsUnit >> 8) & 0xF, F = (regsUnit >> 12) & 0xF;
-        int[] r = {C, D, E, F};
+        int[] r = {C, D, E, F, G};
         StringBuilder b = new StringBuilder("{");
-        for (int i = 0; i < count && i < 4; i++) {
+        for (int i = 0; i < count && i < 5; i++) {
             if (i > 0) b.append(", ");
-            b.append('v').append(r[i]);
+            b.append(reg(r[i]));
         }
         b.append("}, ").append(ref);
         return b.toString();
@@ -564,17 +710,15 @@ public final class SmaliGen {
 
     private static String inv3rc(String ref, int count, int start) {
         if (count <= 0) return "{}" + ", " + ref;
-        return "{v" + start + " .. v" + (start + count - 1) + "}, " + ref;
+        if (count == 1) return "{" + reg(start) + "}, " + ref;
+        return "{" + reg(start) + " .. " + reg(start + count - 1) + "}, " + ref;
     }
 
-    /** decodes one instruction to smali text; null = skip (payload) */
+    /** decodes one instruction to smali text */
     private static String decode(int[] ins, int p, int width) {
         int u = ins[p];
         int op = u & 0xFF;
-        if (op == 0x00) {
-            if (width > 1) return "# payload (" + width + " units)";
-            return OPNAMES[0];
-        }
+        if (op == 0x00) return OPNAMES[0];
         String name = OPNAMES[op] != null ? OPNAMES[op] : ("op_" + hex(op));
         int AA = (u >> 8) & 0xFF;
         int A = (u >> 8) & 0x0F;
@@ -583,76 +727,80 @@ public final class SmaliGen {
         int u3 = width >= 3 ? ins[p + 2] : 0;
         int u4 = width >= 4 ? ins[p + 3] : 0;
 
-        // mov 12x / result 11x / return / monitor / throw
+        // 12x: move / unary / binop-2addr / array-length
         if (op == 0x01 || op == 0x04 || op == 0x07 || op == 0x21
                 || (op >= 0x7B && op <= 0x8F) || (op >= 0xB0 && op <= 0xCF)) {
-            return name + " v" + A + ", v" + B;
+            return name + " " + reg(A) + ", " + reg(B);
         }
-        if (op == 0x02 || op == 0x05 || op == 0x08) return name + " v" + AA + ", v" + u2;
+        if (op == 0x02 || op == 0x05 || op == 0x08) return name + " " + reg(AA) + ", " + reg(u2);
         if (op == 0x03 || op == 0x06 || op == 0x09)
-            return name + " v" + AA + ", v" + u2 + ", v" + u3;
+            return name + " " + reg(u2) + ", " + reg(u3);   // 32x: vAAAA, vBBBB
+        // 11x: move-result / return / monitor / throw
         if ((op >= 0x0A && op <= 0x0D) || (op >= 0x0F && op <= 0x11)
                 || op == 0x1D || op == 0x1E || op == 0x27) {
-            return name + " v" + AA;
+            return name + " " + reg(AA);
         }
         if (op == 0x0E) return name;
-        if (op == 0x12) return name + " v" + A + ", " + s4(B);
-        if (op == 0x13 || op == 0x16) return name + " v" + AA + ", " + s16(u2);
-        if (op == 0x14 || op == 0x17) return name + " v" + AA + ", " + s32(u2, u3);
-        if (op == 0x15 || op == 0x19) return name + " v" + AA + ", 0x" + Integer.toHexString(u2 << 16);
+        // constants
+        if (op == 0x12) return name + " " + reg(A) + ", " + lit(s4(B));
+        if (op == 0x13 || op == 0x16) return name + " " + reg(AA) + ", " + lit(s16(u2));
+        if (op == 0x14 || op == 0x17) return name + " " + reg(AA) + ", " + lit(s32(u2, u3));
+        if (op == 0x15) return name + " " + reg(AA) + ", 0x" + Integer.toHexString((u2 & 0xFFFF) << 16);
+        if (op == 0x19) return name + " " + reg(AA) + ", 0x" + Long.toHexString((u2 & 0xFFFFL) << 48) + "L";
         if (op == 0x18) {
-            long lit = (u2 & 0xFFFFL) | ((u3 & 0xFFFFL) << 16)
+            long val = (u2 & 0xFFFFL) | ((u3 & 0xFFFFL) << 16)
                     | ((u4 & 0xFFFFL) << 32) | ((ins[p + 4] & 0xFFFFL) << 48);
-            return name + " v" + AA + ", " + lit;
+            return name + " " + reg(AA) + ", " + lit(val) + "L";
         }
-        if (op == 0x1A) return name + " v" + AA + ", " + quote(smaliString(smaliStringIdx(u2)));
-        if (op == 0x1B) return name + " v" + AA + ", " + quote(smaliString(smaliStringIdx(u2 | (u3 << 16))));
+        if (op == 0x1A) return name + " " + reg(AA) + ", " + quote(smaliString(smaliStringIdx(u2)));
+        if (op == 0x1B) return name + " " + reg(AA) + ", " + quote(smaliString(smaliStringIdx((u2 & 0xFFFF) | (u3 << 16))));
         if (op == 0x1C || op == 0x1F || op == 0x22)
-            return name + " v" + AA + ", " + smaliType(u2);
+            return name + " " + reg(AA) + ", " + smaliType(u2);
         if (op == 0x20 || op == 0x23)
-            return name + " v" + A + ", v" + B + ", " + smaliType(u2);
-        if (op == 0x24) return name + " " + inv35c(smaliMethod(u2), A, u3);
-        if (op == 0x25 || (op >= 0x74 && op <= 0x78))
-            return name + " " + inv3rc(smaliMethod(u2), AA, u3);
+            return name + " " + reg(A) + ", " + reg(B) + ", " + smaliType(u2);
+        if (op == 0x24) return name + " " + inv35c(smaliType(u2), u, u3);
+        if (op == 0x25) return name + " " + inv3rc(smaliType(u2), AA, u3);
+        if (op >= 0x74 && op <= 0x78) return name + " " + inv3rc(smaliMethod(u2), AA, u3);
+        // payload users: target label is the payload offset
         if (op == 0x26 || op == 0x2B || op == 0x2C)
-            return name + " v" + AA + ", -> " + hex(p + s32(u2, u3));
-        if (op == 0x28) return name + " -> " + hex(p + s8(AA));
-        if (op == 0x29) return name + " -> " + hex(p + s16(u2));
-        if (op == 0x2A) return name + " -> " + hex(p + s32(u2, u3));
-        if ((op >= 0x2D && op <= 0x31) || (op >= 0x44 && op <= 0x51) || (op >= 0x90 && op <= 0xAF)) {
-            return name + " v" + AA + ", v" + (u2 >> 8) + ", v" + (u2 & 0xFF);
-        }
+            return name + " " + reg(AA) + ", " + lbl(p + s32(u2, u3));
+        // branches
+        if (op == 0x28 || op == 0x29 || op == 0x2A) return name + " " + lbl(branchTarget(ins, p));
         if (op >= 0x32 && op <= 0x37)
-            return name + " v" + A + ", v" + B + ", -> " + hex(p + s16(u2));
+            return name + " " + reg(A) + ", " + reg(B) + ", " + lbl(branchTarget(ins, p));
         if (op >= 0x38 && op <= 0x3D)
-            return name + " v" + AA + ", -> " + hex(p + s16(u2));
+            return name + " " + reg(AA) + ", " + lbl(branchTarget(ins, p));
+        // 23x: vAA, vBB, vCC  (BB = low byte of the 2nd unit)
+        if ((op >= 0x2D && op <= 0x31) || (op >= 0x44 && op <= 0x51) || (op >= 0x90 && op <= 0xAF)) {
+            return name + " " + reg(AA) + ", " + reg(u2 & 0xFF) + ", " + reg((u2 >> 8) & 0xFF);
+        }
+        // 22c / 21c field access
         if (op >= 0x52 && op <= 0x5F)
-            return name + " v" + A + ", v" + B + ", " + smaliField(u2);
+            return name + " " + reg(A) + ", " + reg(B) + ", " + smaliField(u2);
         if (op >= 0x60 && op <= 0x6D)
-            return name + " v" + AA + ", " + smaliField(u2);
-        if (op >= 0x6E && op <= 0x72) return name + " " + inv35c(smaliMethod(u2), A, u3);
+            return name + " " + reg(AA) + ", " + smaliField(u2);
+        if (op >= 0x6E && op <= 0x72) return name + " " + inv35c(smaliMethod(u2), u, u3);
+        // literals
         if (op >= 0xD0 && op <= 0xD7)
-            return name + " v" + A + ", v" + B + ", " + s16(u2);
+            return name + " " + reg(A) + ", " + reg(B) + ", " + lit(s16(u2));
         if (op >= 0xD8 && op <= 0xE2)
-            return name + " v" + AA + ", v" + (u2 >> 8) + ", " + s8(u2 & 0xFF);
-        if (op == 0xFA) return name + " " + inv35c(smaliMethod(u2), A, u3)
-                + ", proto@" + u4;
-        if (op == 0xFB) return name + " " + inv3rc(smaliMethod(u2), AA, u3)
-                + ", proto@" + u4;
-        if (op == 0xFC) return name + " " + inv35c("callsite@" + u2, A, u3);
+            return name + " " + reg(AA) + ", " + reg(u2 & 0xFF) + ", " + lit(s8(u2 >> 8));
+        if (op == 0xFA) return name + " " + inv35c(smaliMethod(u2), u, u3) + ", proto@" + u4;
+        if (op == 0xFB) return name + " " + inv3rc(smaliMethod(u2), AA, u3) + ", proto@" + u4;
+        if (op == 0xFC) return name + " " + inv35c("callsite@" + u2, u, u3);
         if (op == 0xFD) return name + " " + inv3rc("callsite@" + u2, AA, u3);
-        if (op == 0xFE) return name + " v" + AA + ", mh@" + u2;
-        if (op == 0xFF) return name + " v" + AA + ", proto@" + u2;
+        if (op == 0xFE) return name + " " + reg(AA) + ", mh@" + u2;
+        if (op == 0xFF) return name + " " + reg(AA) + ", proto@" + u2;
         return name;
     }
 
     // per-dex-file resolvers (static context bound to current parse)
-    private static DexFile cur;
+    private static final ThreadLocal<DexFile> CUR = new ThreadLocal<DexFile>();
     private static int smaliStringIdx(int idx) { return idx; }
-    private static String smaliString(int idx) { return getString(cur, idx); }
-    private static String smaliType(int idx) { return getType(cur, idx); }
-    private static String smaliMethod(int idx) { return methodRef(cur, idx); }
-    private static String smaliField(int idx) { return fieldRef(cur, idx); }
+    private static String smaliString(int idx) { return getString(CUR.get(), idx); }
+    private static String smaliType(int idx) { return getType(CUR.get(), idx); }
+    private static String smaliMethod(int idx) { return methodRef(CUR.get(), idx); }
+    private static String smaliField(int idx) { return fieldRef(CUR.get(), idx); }
 
     private static String quote(String s) {
         StringBuilder b = new StringBuilder("\"");
@@ -670,11 +818,11 @@ public final class SmaliGen {
 
     /** renders with the dex bound for reference resolution */
     public static String renderClass(DexFile f, DexClass c) {
-        cur = f;
+        CUR.set(f);
         try {
             return renderClass(c);
         } finally {
-            cur = null;
+            CUR.remove();
         }
     }
 }

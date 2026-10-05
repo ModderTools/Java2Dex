@@ -1,7 +1,6 @@
 package com.java2dex.app;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.os.Bundle;
@@ -119,6 +118,47 @@ public class SettingsActivity extends Activity {
         ed.addView(wrapRow, wrp);
         body.addView(ed, margin());
 
+        // ---- build ----
+        LinearLayout bd = section("BUILD");
+        LinearLayout apiRow = new LinearLayout(this);
+        apiRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout apiCol = new LinearLayout(this);
+        apiCol.setOrientation(LinearLayout.VERTICAL);
+        apiCol.addView(Ui.text(this, "🎯  Minimum Android API", 14.5f, t.text, true));
+        apiCol.addView(Ui.text(this, "Lower = runs on older devices (more desugaring)", 11, t.textSub, false));
+        apiRow.addView(apiCol, new LinearLayout.LayoutParams(0, -2, 1f));
+        final TextView apiVal = Ui.button(this, "API " + Prefs.minApi(this), Ui.GREEN);
+        apiVal.setOnClickListener(v -> {
+            final int[] levels = {21, 24, 26, 28, 30};
+            String[] labels = new String[levels.length];
+            for (int i = 0; i < levels.length; i++) labels[i] = "API " + levels[i] + androidName(levels[i]);
+            Ui.dialog(this).setTitle("Minimum API level")
+                    .setItems(labels, (d, which) -> {
+                        Prefs.minApi(this, levels[which]);
+                        apiVal.setText("API " + levels[which]);
+                    }).show();
+        });
+        apiRow.addView(apiVal, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams arp = new LinearLayout.LayoutParams(-1, -2);
+        arp.topMargin = Ui.dp(12);
+        bd.addView(apiRow, arp);
+
+        LinearLayout bundleRow = new LinearLayout(this);
+        bundleRow.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout bundleCol = new LinearLayout(this);
+        bundleCol.setOrientation(LinearLayout.VERTICAL);
+        bundleCol.addView(Ui.text(this, "📚  Bundle library jars", 14.5f, t.text, true));
+        bundleCol.addView(Ui.text(this, "Merge libs into the DEX (off = compile-only)", 11, t.textSub, false));
+        bundleRow.addView(bundleCol, new LinearLayout.LayoutParams(0, -2, 1f));
+        Switch bundleSw = new Switch(this);
+        bundleSw.setChecked(Prefs.bundleLibs(this));
+        bundleSw.setOnCheckedChangeListener((b, v) -> Prefs.bundleLibs(this, v));
+        bundleRow.addView(bundleSw, new LinearLayout.LayoutParams(-2, -2));
+        LinearLayout.LayoutParams brp2 = new LinearLayout.LayoutParams(-1, -2);
+        brp2.topMargin = Ui.dp(14);
+        bd.addView(bundleRow, brp2);
+        body.addView(bd, margin());
+
         // ---- output ----
         LinearLayout out = section("OUTPUT FOLDER");
         TextView cur = Ui.text(this, "Current: "
@@ -154,8 +194,14 @@ public class SettingsActivity extends Activity {
         save.setOnClickListener(v -> {
             String s = folderInput.getText().toString().trim();
             if (s.length() == 0) { Ui.toast(this, "Type a path or use Default"); return; }
+            if (!s.startsWith("/") || s.equals("/") || s.equals("/storage")
+                    || s.equals("/storage/emulated") || s.equals("/storage/emulated/0")
+                    || s.replace("//", "/").matches("/storage/emulated/0/?")) {
+                Ui.toast(this, "Pick a sub-folder, e.g. /storage/emulated/0/MyDex");
+                return;
+            }
             File f = new File(s);
-            if (!f.exists() && !f.mkdirs()) { Ui.toast(this, "Cannot create folder"); return; }
+            if (!f.exists() && !f.mkdirs()) { Ui.toast(this, "Cannot create folder — check storage permission"); return; }
             Prefs.folder(this, s);
             cur.setText("Current: " + Project.java2dexRoot(this).getAbsolutePath());
             Ui.toast(this, "Output folder updated ✔");
@@ -167,7 +213,7 @@ public class SettingsActivity extends Activity {
             Ui.toast(this, "Using default Java2Dex folder");
         });
 
-        TextView reset = Ui.button(this, "♻  Reset Java2Dex Folder", Ui.RED);
+        TextView reset = Ui.button(this, "♻  Clean DEX Outputs", Ui.RED);
         LinearLayout.LayoutParams rsrp = new LinearLayout.LayoutParams(-1, -2);
         rsrp.topMargin = Ui.dp(10);
         out.addView(reset, rsrp);
@@ -176,8 +222,15 @@ public class SettingsActivity extends Activity {
 
         // ---- data ----
         LinearLayout dt = section("DATA");
+        TextView cache = Ui.button(this, "🧹  Clear Build Cache", t.textSub);
+        LinearLayout.LayoutParams cacheLp = new LinearLayout.LayoutParams(-1, -2);
+        cacheLp.topMargin = Ui.dp(12);
+        dt.addView(cache, cacheLp);
+        cache.setOnClickListener(v -> clearBuildCache());
         TextView wipe = Ui.button(this, "🗑  Delete All Projects", Ui.RED);
-        dt.addView(wipe, new LinearLayout.LayoutParams(-1, -2));
+        LinearLayout.LayoutParams wipeLp = new LinearLayout.LayoutParams(-1, -2);
+        wipeLp.topMargin = Ui.dp(10);
+        dt.addView(wipe, wipeLp);
         wipe.setOnClickListener(v -> confirmWipe());
         body.addView(dt, margin());
 
@@ -204,21 +257,52 @@ public class SettingsActivity extends Activity {
     }
 
     private void confirmReset() {
-        new AlertDialog.Builder(this)
-                .setTitle("Reset Java2Dex folder?")
-                .setMessage("All converted DEX files inside the output folder will be deleted.\n\n"
-                        + Project.java2dexRoot(this).getAbsolutePath())
-                .setPositiveButton("Reset", (d, w) -> {
-                    Project.deleteDir(Project.java2dexRoot(this));
-                    Project.java2dexRoot(this);
-                    Ui.toast(this, "Folder reset ✔");
+        Ui.dialog(this)
+                .setTitle("Clean DEX outputs?")
+                .setMessage("Deletes the classes*.dex and smali files Java2Dex created for your projects in:\n\n"
+                        + Project.java2dexRootNoCreate(this).getAbsolutePath()
+                        + "\n\nOther files in that folder are never touched. Your sources stay safe — "
+                        + "just re-convert.")
+                .setPositiveButton("Clean", (d, w) -> {
+                    int n = Project.cleanOutputs(this);
+                    Ui.toast(this, n > 0 ? "Outputs cleaned ✔" : "Nothing to clean");
                 })
                 .setNegativeButton("Cancel", null)
                 .show();
     }
 
+    private static String androidName(int api) {
+        switch (api) {
+            case 21: return "  (5.0)";
+            case 24: return "  (7.0)";
+            case 26: return "  (8.0)";
+            case 28: return "  (9)";
+            case 30: return "  (11)";
+            default: return "";
+        }
+    }
+
+    private void clearBuildCache() {
+        long freed = 0;
+        for (Project p : Project.all(this)) {
+            freed += size(p.classesDir(this)) + size(p.dexTmpDir(this));
+            Project.deleteDir(p.classesDir(this));
+            Project.deleteDir(p.dexTmpDir(this));
+        }
+        Ui.toast(this, "Cache cleared — " + Ui.size(freed) + " freed");
+    }
+
+    private static long size(File f) {
+        if (f == null || !f.exists()) return 0;
+        if (f.isFile()) return f.length();
+        long n = 0;
+        File[] fs = f.listFiles();
+        if (fs != null) for (File x : fs) n += size(x);
+        return n;
+    }
+
     private void confirmWipe() {
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Delete all projects?")
                 .setMessage("All project sources, logs and list data will be erased. Output DEX files stay in the Java2Dex folder.")
                 .setPositiveButton("Delete All", (d, w) -> {

@@ -3,7 +3,6 @@ package com.java2dex.app;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
@@ -27,9 +26,6 @@ import android.widget.ListView;
 import android.widget.TextView;
 
 import java.io.File;
-import java.io.FileOutputStream;
-import java.io.InputStream;
-import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -41,7 +37,7 @@ public class MainActivity extends Activity {
     private Theme t;
     private ListView list;
     private LinearLayout emptyBox, permOverlay;
-    private TextView statTotal, statOk, statErr;
+    private TextView statTotal, statOk, statErr, emptyTitle, emptySub;
     private FrameLayout splash, splashLogoBox, fab;
     private final List<Project> projects = new ArrayList<>();
     private final List<Project> shown = new ArrayList<>();
@@ -49,6 +45,7 @@ public class MainActivity extends Activity {
     private String query = "";
     private boolean statsAnimated = false;
     private boolean askedStorage = false;
+    private boolean permSkipped = false;
     private boolean appliedDark;
 
     @Override
@@ -62,7 +59,9 @@ public class MainActivity extends Activity {
         extractAndroidJar();
         buildUi();
         refresh();
-        runSplash();
+        // no splash replay after a theme switch (recreate) — it felt like an app restart
+        if (savedInstanceState == null) runSplash();
+        else { splash.setVisibility(View.GONE); fab.setAlpha(1f); }
     }
 
     @Override
@@ -72,7 +71,7 @@ public class MainActivity extends Activity {
         boolean ok = storageOk();
         if (ok) Project.java2dexRoot(this);
         if (permOverlay != null) {
-            permOverlay.setVisibility((!ok && askedStorage) ? View.VISIBLE : View.GONE);
+            permOverlay.setVisibility((!ok && askedStorage && !permSkipped) ? View.VISIBLE : View.GONE);
         }
         refresh();
     }
@@ -142,7 +141,7 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams clp = new LinearLayout.LayoutParams(-2, -2);
         clp.leftMargin = Ui.dp(12);
         titleCol.addView(Ui.text(this, "Java2Dex", 21, Color.WHITE, true));
-        titleCol.addView(Ui.text(this, "v2.0 • Java → DEX power suite", 11.5f, 0xB3FFFFFF, false));
+        titleCol.addView(Ui.text(this, "v" + Ui.VERSION + " • Java → DEX power suite", 11.5f, 0xB3FFFFFF, false));
         titleRow.addView(titleCol, clp);
 
         titleRow.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
@@ -218,7 +217,7 @@ public class MainActivity extends Activity {
         list.setPadding(Ui.dp(16), Ui.dp(12), Ui.dp(16), Ui.dp(110));
         list.setOnItemClickListener((parent, v, pos, id) -> openDetail(shown.get(pos)));
         list.setOnItemLongClickListener((parent, v, pos, id) -> {
-            confirmDelete(shown.get(pos));
+            projectOptions(shown.get(pos));
             return true;
         });
         listContainer.addView(list, new FrameLayout.LayoutParams(-1, -1));
@@ -239,6 +238,7 @@ public class MainActivity extends Activity {
         emptyBox.addView(eIcon, new LinearLayout.LayoutParams(Ui.dp(84), Ui.dp(84)));
 
         TextView e2 = Ui.text(this, "No projects yet", 16, t.text, true);
+        emptyTitle = e2;
         e2.setGravity(Gravity.CENTER);
         LinearLayout.LayoutParams e2p = new LinearLayout.LayoutParams(-2, -2);
         e2p.topMargin = Ui.dp(14);
@@ -246,6 +246,7 @@ public class MainActivity extends Activity {
         TextView e3 = Ui.text(this,
                 "Create a project or open the IDE\nto start converting", 12.5f, t.textSub, false);
         e3.setGravity(Gravity.CENTER);
+        emptySub = e3;
         LinearLayout.LayoutParams e3p = new LinearLayout.LayoutParams(-2, -2);
         e3p.topMargin = Ui.dp(4);
         emptyBox.addView(e3, e3p);
@@ -307,6 +308,15 @@ public class MainActivity extends Activity {
         LinearLayout.LayoutParams glp = new LinearLayout.LayoutParams(-2, -2);
         glp.topMargin = Ui.dp(20);
         permOverlay.addView(grant, glp);
+
+        TextView skip = Ui.text(this, "Not now", 13, t.textSub, true);
+        skip.setPadding(Ui.dp(20), Ui.dp(14), Ui.dp(20), Ui.dp(14));
+        skip.setOnClickListener(v -> {
+            permSkipped = true;
+            permOverlay.setVisibility(View.GONE);
+            Ui.toast(this, "Converting needs storage access to save the DEX");
+        });
+        permOverlay.addView(skip, new LinearLayout.LayoutParams(-2, -2));
         root.addView(permOverlay, new FrameLayout.LayoutParams(-1, -1));
 
         // ---------- splash ----------
@@ -337,7 +347,7 @@ public class MainActivity extends Activity {
         sc.addView(n2);
         splash.addView(sc, new FrameLayout.LayoutParams(-2, -2, Gravity.CENTER));
 
-        TextView foot = Ui.text(this, "v2.0 • made for modders", 11, t.textSub, false);
+        TextView foot = Ui.text(this, "v" + Ui.VERSION + " • made for modders", 11, t.textSub, false);
         foot.setGravity(Gravity.CENTER);
         FrameLayout.LayoutParams fp = new FrameLayout.LayoutParams(
                 -2, -2, Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
@@ -415,7 +425,7 @@ public class MainActivity extends Activity {
         if (target == null) {
             target = new Project();
             target.id = String.valueOf(System.currentTimeMillis());
-            target.name = "Untitled";
+            target.name = Project.uniqueName(this, "Untitled");
             target.createdAt = System.currentTimeMillis();
             target.srcDir(this).mkdirs();
             writeFile(new File(target.srcDir(this), "Main.java"),
@@ -428,7 +438,7 @@ public class MainActivity extends Activity {
     private void createSampleAndOpen() {
         Project p = new Project();
         p.id = String.valueOf(System.currentTimeMillis());
-        p.name = "SampleMod_" + p.id.substring(p.id.length() - 4);
+        p.name = Project.uniqueName(this, "SampleMod_" + p.id.substring(p.id.length() - 4));
         p.createdAt = System.currentTimeMillis();
         p.srcDir(this).mkdirs();
         writeFile(new File(p.srcDir(this), "HelloMod.java"),
@@ -446,12 +456,7 @@ public class MainActivity extends Activity {
     }
 
     private static void writeFile(File f, String content) {
-        try {
-            f.getParentFile().mkdirs();
-            FileOutputStream w = new FileOutputStream(f);
-            w.write(content.getBytes());
-            w.close();
-        } catch (Exception ignored) { }
+        try { Ui.writeText(f, content); } catch (Exception ignored) { }
     }
 
     private void openIde(Project p) {
@@ -462,10 +467,11 @@ public class MainActivity extends Activity {
     }
 
     private void showOutputInfo() {
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Output folder")
-                .setMessage(Project.java2dexRoot(this).getAbsolutePath()
-                        + "\n\nEach project saves as:\n<project-name>/classes.dex")
+                .setMessage(Project.java2dexRootNoCreate(this).getAbsolutePath()
+                        + "\n\nEach project saves as:\n<project-name>/classes.dex"
+                        + "\n(+ classes2.dex … for very large projects)")
                 .setPositiveButton("OK", null)
                 .show();
     }
@@ -488,21 +494,8 @@ public class MainActivity extends Activity {
     }
 
     private void extractAndroidJar() {
-        File target = new File(getFilesDir(), "sys/android.jar");
-        if (target.exists()) return;
-        new Thread(() -> {
-            try {
-                InputStream in = getAssets().open("android.jar");
-                target.getParentFile().mkdirs();
-                OutputStream out = new FileOutputStream(target);
-                byte[] buf = new byte[16384];
-                int n;
-                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-                out.flush();
-                out.close();
-                in.close();
-            } catch (Exception ignored) { }
-        }, "jar-extract").start();
+        final android.content.Context app = getApplicationContext();
+        new Thread(() -> Converter.ensureAndroidJar(app), "jar-extract").start();
     }
 
     // ---------------- data ----------------
@@ -536,7 +529,15 @@ public class MainActivity extends Activity {
             if (q.isEmpty() || p.name.toLowerCase(Locale.US).contains(q)) shown.add(p);
         }
         if (adapter != null) adapter.notifyDataSetChanged();
-        if (emptyBox != null) emptyBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
+        if (emptyBox != null) {
+            emptyBox.setVisibility(shown.isEmpty() ? View.VISIBLE : View.GONE);
+            if (emptyTitle != null) {
+                boolean searching = q.length() > 0 && !projects.isEmpty();
+                emptyTitle.setText(searching ? "No matches" : "No projects yet");
+                emptySub.setText(searching ? "Try a different search"
+                        : "Create a project or open the IDE\nto start converting");
+            }
+        }
     }
 
     private void openDetail(Project p) {
@@ -546,8 +547,19 @@ public class MainActivity extends Activity {
         overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out);
     }
 
+    private void projectOptions(final Project p) {
+        Ui.dialog(this)
+                .setTitle(p.name)
+                .setItems(new String[]{"🧠 Open in Code IDE", "ℹ Details", "🗑 Delete"}, (d, w) -> {
+                    if (w == 0) openIde(p);
+                    else if (w == 1) openDetail(p);
+                    else confirmDelete(p);
+                })
+                .show();
+    }
+
     private void confirmDelete(Project p) {
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Delete project?")
                 .setMessage("\"" + p.name + "\" and its DEX output will be removed.")
                 .setPositiveButton("Delete", (d, w) -> {

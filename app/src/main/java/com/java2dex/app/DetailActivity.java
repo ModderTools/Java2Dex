@@ -1,17 +1,11 @@
 package com.java2dex.app;
 
 import android.app.Activity;
-import android.app.AlertDialog;
-import android.content.ContentValues;
 import android.content.Intent;
 import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
-import android.net.Uri;
-import android.os.Build;
 import android.os.Bundle;
-import android.os.Environment;
-import android.provider.MediaStore;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.FrameLayout;
@@ -20,12 +14,8 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.FileInputStream;
-import java.io.FileWriter;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.util.List;
 
 public class DetailActivity extends Activity {
 
@@ -47,6 +37,18 @@ public class DetailActivity extends Activity {
 
         buildUi();
         refreshInfo();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // the project may have been rebuilt from the IDE
+        if (p != null && infoCol != null) {
+            Project fresh = Project.byId(this, p.id);
+            if (fresh == null) { finish(); return; }
+            p = fresh;
+            refreshInfo();
+        }
     }
 
     private LinearLayout.LayoutParams w() {
@@ -101,6 +103,12 @@ public class DetailActivity extends Activity {
         infoCol.setOrientation(LinearLayout.VERTICAL);
         infoCard.addView(infoCol, new LinearLayout.LayoutParams(-1, -2));
 
+        // row 0 : edit
+        TextView ide = Ui.button(this, "🧠  Open in Code IDE", Ui.GREEN);
+        LinearLayout.LayoutParams g0p = new LinearLayout.LayoutParams(-1, -2);
+        g0p.topMargin = Ui.dp(16);
+        body.addView(ide, g0p);
+
         LinearLayout g1 = new LinearLayout(this);
         TextView recon = Ui.button(this, "🔄  Re-convert", Ui.GREEN);
         g1.addView(recon, w());
@@ -109,7 +117,7 @@ public class DetailActivity extends Activity {
         s2.leftMargin = Ui.dp(10);
         g1.addView(smali, s2);
         LinearLayout.LayoutParams g1p = new LinearLayout.LayoutParams(-1, -2);
-        g1p.topMargin = Ui.dp(16);
+        g1p.topMargin = Ui.dp(10);
         body.addView(g1, g1p);
 
         LinearLayout g2 = new LinearLayout(this);
@@ -139,27 +147,29 @@ public class DetailActivity extends Activity {
         delp.topMargin = Ui.dp(10);
         body.addView(del, delp);
 
+        ide.setOnClickListener(v -> {
+            Intent i = new Intent(this, IdeActivity.class);
+            i.putExtra("id", p.id);
+            startActivity(i);
+        });
         recon.setOnClickListener(v -> reconvert());
         smali.setOnClickListener(v -> {
+            if (p.publicDexFiles(this).isEmpty()) { Ui.toast(this, "No DEX yet — re-convert first"); return; }
             Intent i = new Intent(this, DexViewerActivity.class);
             i.putExtra("id", p.id);
             startActivity(i);
         });
         ex.setOnClickListener(v -> exportToDownloads());
-        sh.setOnClickListener(v -> {
-            File f = p.publicDexFile(this);
-            if (f.exists()) Ui.shareFile(this, f, p.safeName() + "_classes.dex");
-            else Ui.toast(this, "No DEX yet — re-convert first");
-        });
-        cp.setOnClickListener(v ->
-                Ui.copy(this, "dex-path", p.publicDexFile(this).getAbsolutePath()));
+        sh.setOnClickListener(v -> Ui.shareFiles(this, p.publicDexFiles(this), p.safeName()));
+        cp.setOnClickListener(v -> Ui.copy(this, "dex-path", p.publicDexDirNoCreate(this).getAbsolutePath()
+                + File.separator + "classes.dex"));
         lg.setOnClickListener(v -> showLog(null));
         del.setOnClickListener(v -> confirmDelete());
 
         progressOverlay = new LinearLayout(this);
         progressOverlay.setOrientation(LinearLayout.VERTICAL);
         progressOverlay.setGravity(Gravity.CENTER);
-        progressOverlay.setBackgroundColor(0xF0FFFFFF);
+        progressOverlay.setBackgroundColor(Prefs.dark(this) ? 0xF00B1220 : 0xF0FFFFFF);   // was always white
         progressOverlay.setClickable(true);
         ProgressBar pb = new ProgressBar(this);
         pb.setIndeterminateTintList(ColorStateList.valueOf(Ui.GREEN));
@@ -192,11 +202,14 @@ public class DetailActivity extends Activity {
         stat.addView(chip);
         infoCol.addView(stat, new LinearLayout.LayoutParams(-1, -2));
 
+        List<File> dex = p.publicDexFiles(this);
         addRow("Created", p.createdText());
         addRow("Last build", p.dateText());
-        addRow("Source files", countJava(p.srcDir(this)) + " .java");
-        addRow("DEX size", st == Project.ST_OK ? Ui.size(p.dexSize) : "—");
-        addRow("DEX file", p.publicDexFile(this).getAbsolutePath());
+        addRow("Source files", countJava(p.srcDir(this)) + " .java"
+                + (p.libCount(this) > 0 ? "   •   " + p.libCount(this) + " library jar(s)" : ""));
+        addRow("DEX size", dex.isEmpty() ? "—" : Ui.size(p.dexSize)
+                + (dex.size() > 1 ? "  (" + dex.size() + " dex files)" : ""));
+        addRow("Output folder", p.publicDexDirNoCreate(this).getAbsolutePath());
     }
 
     private void addRow(String k, String v) {
@@ -226,11 +239,12 @@ public class DetailActivity extends Activity {
     }
 
     private void reconvert() {
+        if (Converter.isRunning()) { Ui.toast(this, "A conversion is already running"); return; }
         progressOverlay.setVisibility(View.VISIBLE);
         Converter.convert(this, p, new Converter.Callback() {
             @Override public void onStep(String s) { statusText2.setText(s); }
             @Override public void onDone(boolean ok, String log) {
-                saveLog(log);
+                if (!Ui.alive(DetailActivity.this)) return;
                 progressOverlay.setVisibility(View.GONE);
                 if (ok) Ui.toast(DetailActivity.this, "Rebuilt successfully ✔");
                 else { Ui.toast(DetailActivity.this, "Build failed — see log"); showLog(log); }
@@ -240,7 +254,7 @@ public class DetailActivity extends Activity {
     }
 
     private void confirmDelete() {
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Delete project?")
                 .setMessage("Removes sources, logs and DEX output for \"" + p.name + "\".")
                 .setPositiveButton("Delete", (d, w2) -> {
@@ -260,7 +274,7 @@ public class DetailActivity extends Activity {
         int pd = Ui.dp(14);
         tv.setPadding(pd, pd, pd, pd);
         sc.addView(tv, new FrameLayout.LayoutParams(-1, -2));
-        new AlertDialog.Builder(this)
+        Ui.dialog(this)
                 .setTitle("Build log")
                 .setView(sc)
                 .setPositiveButton("Copy", (d, w2) -> Ui.copy(this, "log", content))
@@ -270,49 +284,18 @@ public class DetailActivity extends Activity {
 
     private String readLog() {
         try {
-            FileInputStream in = new FileInputStream(p.logFile(this));
-            ByteArrayOutputStream bo = new ByteArrayOutputStream();
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
-            in.close();
-            return bo.toString();
+            return Ui.readText(p.logFile(this));
         } catch (Exception e) {
             return "No log available.";
         }
     }
 
-    private void saveLog(String log) {
-        try {
-            File f = p.logFile(this);
-            f.getParentFile().mkdirs();
-            FileWriter w = new FileWriter(f);
-            w.write(log); w.close();
-        } catch (Exception ignored) { }
-    }
-
     private void exportToDownloads() {
-        if (Build.VERSION.SDK_INT < 29) {
-            Ui.toast(this, "Requires Android 10+");
-            return;
-        }
+        List<File> dex = p.publicDexFiles(this);
+        if (dex.isEmpty()) { Ui.toast(this, "No DEX — convert first"); return; }
         try {
-            File dex = p.publicDexFile(this);
-            if (!dex.exists()) { Ui.toast(this, "No DEX — convert first"); return; }
-            ContentValues cv = new ContentValues();
-            cv.put(MediaStore.MediaColumns.DISPLAY_NAME, p.safeName() + "_classes.dex");
-            cv.put(MediaStore.MediaColumns.MIME_TYPE, "application/octet-stream");
-            cv.put(MediaStore.MediaColumns.RELATIVE_PATH,
-                    Environment.DIRECTORY_DOWNLOADS + "/Java2Dex");
-            Uri uri = getContentResolver().insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
-            if (uri == null) throw new java.io.IOException("insert failed");
-            InputStream in = new FileInputStream(dex);
-            OutputStream out = getContentResolver().openOutputStream(uri);
-            byte[] buf = new byte[8192];
-            int n;
-            while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
-            out.flush(); out.close(); in.close();
-            Ui.toast(this, "Exported to Downloads/Java2Dex ✔");
+            for (File f : dex) Ui.exportToDownloads(this, f, p.safeName() + "_" + f.getName());
+            Ui.toast(this, dex.size() + " file(s) exported to Downloads/Java2Dex ✔");
         } catch (Exception e) {
             Ui.toast(this, "Export failed: " + e.getMessage());
         }
