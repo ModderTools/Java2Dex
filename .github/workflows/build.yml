@@ -30,7 +30,8 @@ jobs:
             cp "$JAR" app/src/main/assets/android.jar
             echo "android.jar bundled OK"
           else
-            echo "WARNING: android.jar not found on runner"
+            echo "ERROR: android.jar not found on runner - the app cannot compile without it"
+            exit 1
           fi
 
       - name: Set up Gradle 8.4
